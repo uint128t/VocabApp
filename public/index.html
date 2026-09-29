@@ -151,11 +151,16 @@
                 <legend>模型</legend>
                 <div class="row">
                   <label class="inline-field">默认模型 <select id="setModel" data-no-empty="1"></select></label>
+                </div>
+                <p class="hint">下面这组是「新增候选」：模型名与接入点必填，密钥从 <code>.env</code> 里已有的名字里挑，填好点「添加」再加入候选。</p>
+                <div class="row">
                   <input id="newModel" type="text" placeholder="模型名，如 glm-4.5" />
                   <input id="newModelUrl" type="text" placeholder="接入点 https://…（必填）" />
-                  <input id="newModelExtra" type="text" placeholder="附加参数 JSON（可选）" />
                   <label class="inline-field">密钥 <select id="newModelKey" data-no-empty="1"></select></label>
                   <button id="addModel" class="btn" type="button">添加</button>
+                </div>
+                <div class="row">
+                  <input id="newModelExtra" type="text" placeholder='附加参数 JSON（可选），如 {"enable_thinking": false}' />
                 </div>
                 <div class="row" id="modelList"></div>
                 <div class="row">

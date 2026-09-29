@@ -1080,6 +1080,20 @@ button:disabled {
   min-width: 180px;
 }
 
+/* 「新增候选」：模型名定宽，接入点吃掉余量，附加参数自己一行占满 */
+#newModel {
+  flex: 0 1 200px;
+  min-width: 150px;
+}
+
+#newModelUrl {
+  flex: 1 1 280px;
+}
+
+#newModelExtra {
+  flex: 1 1 auto;
+}
+
 .settings textarea {
   min-height: 84px;
   font-family: var(--mono);

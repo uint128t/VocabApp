@@ -83,10 +83,14 @@ function syncSettingDefaults() {
 function renderModelChips() {
   const box = $('#modelList');
   box.innerHTML = '';
-  const label = document.createElement('span');
-  label.className = 'hint';
-  label.textContent = settings.model ? `默认模型：${settings.model}` : '未设置默认模型';
-  box.append(label);
+  // 默认模型上面那个下拉已经写着，这里不再重复一遍；只有候选为空时给一句提示。
+  if (!settings.extraModels.length) {
+    const label = document.createElement('span');
+    label.className = 'hint';
+    label.textContent = '还没有候选模型。';
+    box.append(label);
+    return;
+  }
   for (const m of settings.extraModels) {
     const chip = document.createElement('span');
     chip.className = 'already';
