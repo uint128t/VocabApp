@@ -55,7 +55,7 @@ async function start(content = FIXTURE, { ai, cefr } = {}) {
     server,
     base,
     settingsFile: path.join(dir, 'settings.json'),
-    stateFile: path.join(dir, 'state', 'exam.json'),
+    stateFile: path.join(dir, 'state', 'session.json'),
   };
 }
 
@@ -131,9 +131,12 @@ test('static assets are served without caching', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /text\/html/);
   assert.equal(res.headers.get('cache-control'), 'no-store');
-  const js = await fetch(`${base}/app.js`);
-  assert.match(js.headers.get('content-type'), /javascript/);
-  assert.equal(js.status, 200);
+  for (const path of ['/app.js', '/js/core.js', '/js/session-ui.js']) {
+    const js = await fetch(base + path);
+    assert.equal(js.status, 200, path);
+    assert.match(js.headers.get('content-type'), /javascript/, path);
+    assert.equal(js.headers.get('cache-control'), 'no-store', path);
+  }
 });
 
 test('unknown paths and traversal are refused', async () => {
@@ -494,32 +497,6 @@ test('POST /api/set-checked reverts the box and touches nothing else', async () 
   assert.equal((await post(base, '/api/set-checked', { word: 'nosuch', checked: true })).status, 404);
 });
 
-test('GET /api/random samples sense targets from the filtered pool', async () => {
-  const { base } = await start(QUIZ_FIXTURE);
-  const all = await (await fetch(`${base}/api/random?count=9`)).json();
-  assert.deepEqual(all.targets.map((t) => `${t.word}#${t.sense}`).sort(), ['absorb#0', 'abyss#0', 'ballpoint#0']);
-  assert.deepEqual(all.targets.find((t) => t.word === 'abyss'), {
-    word: 'abyss',
-    sense: 0,
-    count: 1,
-    chapter: 'A',
-    level: 'C2',
-    definition: 'deep hole',
-    chinese: null,
-    example: 'The ship disappeared into the abyss.',
-    checked: true,
-  });
-
-  const unchecked = await (await fetch(`${base}/api/random?onlyUnchecked=1&count=9`)).json();
-  assert.deepEqual(unchecked.targets.map((t) => t.word).sort(), ['absorb', 'ballpoint']);
-  const b1 = await (await fetch(`${base}/api/random?difficulty=B1`)).json();
-  assert.deepEqual(b1.targets.map((t) => t.word), ['absorb']);
-  const one = await (await fetch(`${base}/api/random`)).json();
-  assert.equal(one.targets.length, 1);
-  assert.deepEqual((await (await fetch(`${base}/api/random?difficulty=A1`)).json()).targets, []);
-  assert.equal((await fetch(`${base}/api/random?count=0`)).status, 400);
-  assert.equal((await fetch(`${base}/api/random?difficulty=b1`)).status, 200);
-});
 
 
 
@@ -721,95 +698,204 @@ test('POST /api/commit-delete rejects unknown words and dirty files without writ
   assert.equal(blocked.body.error.code, 'parseErrors');
 });
 
-const EXAM_FIXTURE =
+const SESSION_FIXTURE =
   '### A\n\n- absorb\n  - [x] #B1 - take in - Plants absorb water.\n- abyss\n  - [ ] #C2 - deep hole - The ship disappeared into the abyss.\n';
 
-test('GET /api/exam is empty before a round starts', async () => {
-  const { base, stateFile } = await start(EXAM_FIXTURE, { ai: fakeAi() });
-  assert.deepEqual(await (await fetch(`${base}/api/exam`)).json(), { state: null, current: null, preview: null });
+const ONLY_CHECKED = '### A\n\n- absorb\n  - [x] #B1 - take in - Plants absorb water.\n';
+
+test('GET /api/session is empty before a round starts', async () => {
+  const { base, stateFile } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  assert.deepEqual(await (await fetch(`${base}/api/session`)).json(), {
+    state: null,
+    current: null,
+    study: null,
+    preview: null,
+  });
   assert.ok(!fs.existsSync(stateFile));
 });
 
-test('exam routes run a round, settle once and keep state out of the project dir', async () => {
-  const { base, file, stateFile } = await start(EXAM_FIXTURE, { ai: fakeAi() });
-  const started = await post(base, '/api/exam/start', { mastery: 'unchecked' });
+test('a review round draws mastered words, judges them and settles in one write', async () => {
+  const { base, file, stateFile } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  const started = await post(base, '/api/session/start', { mode: 'review' });
   assert.equal(started.status, 200);
-  assert.deepEqual(started.body.state.queue, [{ word: 'abyss', sense: 0 }]);
-  assert.equal(started.body.current.word, 'abyss');
-  assert.equal(started.body.current.senseCount, 1);
+  assert.deepEqual(started.body.state.queue, [{ word: 'absorb', senses: [0] }]);
+  assert.equal(started.body.state.mode, 'review');
+  assert.equal(started.body.state.phase, 'test');
+  assert.equal(started.body.study, null);
+  assert.equal(started.body.current.word, 'absorb');
+  assert.equal(started.body.current.open, 1);
   assert.ok(fs.existsSync(stateFile));
 
-  const outOfOrder = await post(base, '/api/exam/answer', { word: 'absorb', userDefinition: 'x', userExample: 'y.' });
+  const outOfOrder = await post(base, '/api/session/answer', { word: 'abyss', answers: [] });
   assert.equal(outOfOrder.status, 409);
   assert.equal(outOfOrder.body.error.code, 'examOutOfOrder');
 
-  const locked = await post(base, '/api/exam/reveal', { word: 'abyss' });
+  const locked = await post(base, '/api/session/reveal', { word: 'absorb' });
   assert.equal(locked.status, 409);
   assert.equal(locked.body.error.code, 'examLocked');
 
-  const answered = await post(base, '/api/exam/answer', { word: 'abyss', sense: 0, userDefinition: 'a deep hole', userExample: 'The abyss yawned below.' });
-  assert.equal(answered.status, 200);
-  assert.equal(answered.body.resolved, 'pass');
-  assert.equal(answered.body.next, null);
-  assert.ok(!('suggestion' in answered.body));
+  const skipped = await post(base, '/api/session/skip', { word: 'absorb', sense: 0 });
+  assert.equal(skipped.status, 200);
+  assert.deepEqual(
+    { resolved: skipped.body.resolved, via: skipped.body.via, sense: skipped.body.sense, done: skipped.body.done },
+    { resolved: 'fail', via: 'skip', sense: 0, done: true },
+  );
+  assert.equal((await post(base, '/api/session/skip', { word: 'absorb', sense: 0 })).status, 409);
 
-  const view = await (await fetch(`${base}/api/exam`)).json();
-  assert.equal(view.current, null);
+  const view = await (await fetch(`${base}/api/session`)).json();
+  assert.equal(view.current.done, true);
   assert.deepEqual(view.preview, {
-    add: [{ word: 'abyss', sense: 0, level: 'C2' }],
-    remove: [],
+    add: [],
+    remove: [{ word: 'absorb', sense: 0, level: 'B1' }],
     unchanged: 0,
     skipped: [],
+    judged: 1,
     total: 1,
   });
 
-  const revealed = await post(base, '/api/exam/reveal', { word: 'abyss', sense: 0 });
+  const revealed = await post(base, '/api/session/reveal', { word: 'absorb' });
   assert.equal(revealed.status, 200);
-  assert.equal(revealed.body.definition, 'deep hole');
-  assert.equal(revealed.body.sense, 0);
+  assert.equal(revealed.body.senses[0].definition, 'take in');
+  assert.equal(revealed.body.senses[0].via, 'skip');
 
-  const committed = await post(base, '/api/exam/commit', {});
+  const advanced = await post(base, '/api/session/next', {});
+  assert.equal(advanced.status, 200);
+  assert.equal(advanced.body.cursor, 1);
+  assert.equal(advanced.body.finished, true);
+  assert.equal(advanced.body.current, null);
+
+  const committed = await post(base, '/api/session/commit', {});
   assert.equal(committed.status, 200);
   assert.equal(committed.body.changed, 1);
-  assert.match(fs.readFileSync(file, 'utf8'), /- abyss\n  - \[x\] #C2 - deep hole/);
+  assert.match(fs.readFileSync(file, 'utf8'), /- absorb\n  - \[ \] #B1 - take in/);
   assert.equal(committed.body.state.status, 'settled');
 
-  const again = await post(base, '/api/exam/commit', {});
+  const again = await post(base, '/api/session/commit', {});
   assert.equal(again.status, 409);
   assert.equal(again.body.error.code, 'examSettled');
 });
 
-test('exam start and answer validate their input', async () => {
-  const { base } = await start(EXAM_FIXTURE, { ai: fakeAi() });
-  const empty = await post(base, '/api/exam/start', { chapter: 'Z' });
-  assert.equal(empty.status, 400);
-  assert.equal(empty.body.error.code, 'emptyScope');
+test('a learn round walks the study phase before the test phase', async () => {
+  const { base, file } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  const started = await post(base, '/api/session/start', { mode: 'learn' });
+  assert.equal(started.status, 200);
+  assert.deepEqual(started.body.state.queue, [{ word: 'abyss', senses: [0] }]);
+  assert.equal(started.body.state.phase, 'study');
+  assert.equal(started.body.current, null);
+  assert.deepEqual(started.body.study, {
+    index: 0,
+    total: 1,
+    word: 'abyss',
+    chapter: 'A',
+    senses: [
+      {
+        sense: 0,
+        level: 'C2',
+        definition: 'deep hole',
+        chinese: null,
+        example: 'The ship disappeared into the abyss.',
+        checked: false,
+      },
+    ],
+  });
 
-  assert.equal((await post(base, '/api/exam/start', {})).status, 200);
-  const bad = await post(base, '/api/exam/answer', { word: 'absorb', userDefinition: '  ', userExample: 'y.' });
-  assert.equal(bad.status, 400);
-  assert.equal(bad.body.error.code, 'badAnswer');
-  const nope = await post(base, '/api/exam/reveal', { word: 'nope' });
-  assert.equal(nope.status, 409);
-  assert.equal(nope.body.error.code, 'examLocked');
+  const tooEarly = await post(base, '/api/session/answer', { word: 'abyss', answers: [] });
+  assert.equal(tooEarly.status, 409);
+  assert.equal(tooEarly.body.error.code, 'examOutOfOrder');
+
+  const next = await post(base, '/api/session/study/next', {});
+  assert.equal(next.status, 200);
+  assert.equal(next.body.phase, 'test');
+  assert.equal(next.body.study, null);
+  assert.equal(next.body.current.word, 'abyss');
+  assert.equal((await post(base, '/api/session/study/next', {})).status, 409);
+
+  const answered = await post(base, '/api/session/answer', {
+    word: 'abyss',
+    answers: [{ sense: 0, definition: 'a deep hole' }],
+  });
+  assert.equal(answered.status, 200);
+  assert.deepEqual(answered.body.results, [
+    { sense: 0, pass: true, reason: 'ok', resolved: 'pass', via: null, attemptsLeft: 0 },
+  ]);
+  assert.ok(!('suggestion' in answered.body.results[0]));
+
+  const committed = await post(base, '/api/session/commit', {});
+  assert.equal(committed.status, 200);
+  assert.equal(committed.body.changed, 1);
+  assert.match(fs.readFileSync(file, 'utf8'), /- abyss\n  - \[x\] #C2 - deep hole/);
 });
 
-test('POST /api/exam/skip resolves the current word as unknown', async () => {
-  const { base } = await start(EXAM_FIXTURE, { ai: fakeAi() });
-  const started = await post(base, '/api/exam/start', {});
-  const first = started.body.current.word;
-  const wrong = started.body.current.word === 'absorb' ? 'abyss' : 'absorb';
+test('session start and answer validate their input', async () => {
+  const { base } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  for (const body of [{}, { mode: 'quiz' }, { mode: 1 }]) {
+    const bad = await post(base, '/api/session/start', body);
+    assert.equal(bad.status, 400, JSON.stringify(body));
+    assert.equal(bad.body.error.code, 'badMode');
+  }
 
-  assert.equal((await post(base, '/api/exam/skip', { word: wrong })).status, 409);
-  const skipped = await post(base, '/api/exam/skip', { word: first, sense: 0 });
-  assert.equal(skipped.status, 200);
+  const empty = await start(ONLY_CHECKED, { ai: fakeAi() });
+  const noPool = await post(empty.base, '/api/session/start', { mode: 'learn' });
+  assert.equal(noPool.status, 400);
+  assert.equal(noPool.body.error.code, 'emptyScope');
+
+  assert.equal((await post(base, '/api/session/start', { mode: 'review' })).status, 200);
+  const cur = (await (await fetch(`${base}/api/session`)).json()).current;
+  const noAnswers = await post(base, '/api/session/answer', { word: cur.word });
+  assert.equal(noAnswers.status, 400);
+  assert.equal(noAnswers.body.error.code, 'badAnswers');
+
+  const outOfRange = await post(base, '/api/session/answer', {
+    word: cur.word,
+    answers: [{ sense: 9, definition: 'x' }],
+  });
+  assert.equal(outOfRange.status, 400);
+  assert.equal(outOfRange.body.error.code, 'badSense');
+
+  const wrongWord = await post(base, '/api/session/answer', { word: 'nope', answers: [] });
+  assert.equal(wrongWord.status, 409);
+  assert.equal(wrongWord.body.error.code, 'examOutOfOrder');
+
+  const gone = await post(base, '/api/session/reveal', { word: 'nope' });
+  assert.equal(gone.status, 404);
+  assert.equal(gone.body.error.code, 'wordNotFound');
+});
+
+test('session pause and resume keep the round', async () => {
+  const { base, file } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  await post(base, '/api/session/start', { mode: 'review' });
+  const paused = await post(base, '/api/session/pause', {});
+  assert.equal(paused.status, 200);
   assert.deepEqual(
-    { resolved: skipped.body.resolved, via: skipped.body.via, sense: skipped.body.sense },
-    { resolved: 'fail', via: 'skip', sense: 0 },
+    { phase: paused.body.phase, done: paused.body.done, total: paused.body.total },
+    { phase: 'test', done: 0, total: 1 },
   );
-  const revealed = await post(base, '/api/exam/reveal', { word: first, sense: 0 });
-  assert.equal(revealed.status, 200);
-  assert.equal(revealed.body.attempts, 0);
+
+  const frozen = fs.readFileSync(file);
+  const blocked = await post(base, '/api/session/answer', { word: 'absorb', answers: [] });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.error.code, 'examPaused');
+  assert.equal((await post(base, '/api/session/pause', {})).status, 409);
+  assert.equal((await post(base, '/api/session/commit', {})).status, 409);
+  assert.deepEqual(fs.readFileSync(file), frozen);
+
+  const view = await (await fetch(`${base}/api/session`)).json();
+  assert.equal(view.state.status, 'paused');
+  assert.equal(view.current, null);
+
+  const resumed = await post(base, '/api/session/resume', {});
+  assert.equal(resumed.status, 200);
+  assert.equal(resumed.body.state.status, 'running');
+  assert.equal(resumed.body.current.word, 'absorb');
+  assert.equal((await post(base, '/api/session/resume', {})).status, 409);
+  assert.equal((await post(base, '/api/session/resume', {})).body.error.code, 'examNotPaused');
+});
+
+test('session routes report 503 when no model is configured', async () => {
+  const { base } = await start(SESSION_FIXTURE);
+  assert.equal((await post(base, '/api/session/start', { mode: 'review' })).status, 503);
+  assert.equal((await fetch(`${base}/api/session`)).status, 503);
+  assert.equal((await post(base, '/api/example', { word: 'absorb' })).status, 503);
 });
 
 test('POST /api/example generates a fresh sentence on demand', async () => {
@@ -822,41 +908,6 @@ test('POST /api/example generates a fresh sentence on demand', async () => {
   assert.equal(ai.examples[0].definition, 'space under the roof');
   assert.equal((await post(base, '/api/example', { definition: 'x' })).status, 400);
   assert.equal(ai.examples.length, 1);
-});
-
-test('POST /api/exam pause and resume keep the round', async () => {
-  const { base, file } = await start(EXAM_FIXTURE, { ai: fakeAi() });
-  const started = await post(base, '/api/exam/start', {});
-  const first = started.body.current.word;
-  const paused = await post(base, '/api/exam/pause', {});
-  assert.equal(paused.status, 200);
-  assert.equal(paused.body.done, 0);
-  assert.equal(paused.body.total, 2);
-
-  const frozen = fs.readFileSync(file);
-  const blocked = await post(base, '/api/exam/answer', { word: 'absorb', sense: 0, userDefinition: 'x', userExample: 'y.' });
-  assert.equal(blocked.status, 409);
-  assert.equal(blocked.body.error.code, 'examPaused');
-  assert.equal((await post(base, '/api/exam/pause', {})).status, 409);
-  assert.equal((await post(base, '/api/exam/commit', {})).status, 409);
-  assert.deepEqual(fs.readFileSync(file), frozen);
-
-  const view = await (await fetch(`${base}/api/exam`)).json();
-  assert.equal(view.state.status, 'paused');
-  assert.equal(view.current, null);
-
-  const resumed = await post(base, '/api/exam/resume', {});
-  assert.equal(resumed.status, 200);
-  assert.equal(resumed.body.state.status, 'running');
-  assert.equal(resumed.body.current.word, first);
-  assert.equal((await post(base, '/api/exam/resume', {})).status, 409);
-  assert.equal((await post(base, '/api/exam/resume', {})).body.error.code, 'examNotPaused');
-});
-test('exam routes report 503 when no model is configured', async () => {
-  const { base } = await start(EXAM_FIXTURE);
-  assert.equal((await post(base, '/api/exam/start', {})).status, 503);
-  assert.equal((await fetch(`${base}/api/exam`)).status, 503);
-  assert.equal((await post(base, '/api/example', { word: 'absorb' })).status, 503);
 });
 
 test('POST /api/test-model pings the configured endpoint', async () => {

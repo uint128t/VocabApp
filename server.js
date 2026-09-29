@@ -16,8 +16,8 @@ import {
   planSetSensesChecked,
 } from './vocab.js';
 import { createStore, createStateFile } from './store.js';
-import { createExam } from './exam.js';
-import { createAi, normalizeDifficulty, defaultPrompts, CONTRACTS } from './ai.js';
+import { createSession } from './session.js';
+import { createAi, defaultPrompts, CONTRACTS } from './ai.js';
 import { createSettings, DEFAULTS, modelEndpoints } from './settings.js';
 import { createCefr } from './cefr.js';
 import { loadConfig } from './config.js';
@@ -29,7 +29,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
 };
 const BODY_LIMIT = 1_000_000;
-const AI_STATUS = { aiConfig: 503, aiHttp: 502, aiNetwork: 502, aiJson: 502, aiShape: 502 };
+const AI_STATUS = { aiConfig: 503, aiHttp: 502, aiNetwork: 502, aiEmpty: 502, aiJson: 502, aiShape: 502 };
 const PLAN_STATUS = {
   wordExists: 409,
   duplicateWord: 409,
@@ -38,7 +38,7 @@ const PLAN_STATUS = {
   wordNotFound: 404,
 };
 const JOB_STATUS = { badBatchSize: 400, badWords: 400, jobRunning: 409, jobNotFound: 404 };
-const EXAM_STATUS = {
+const SESSION_STATUS = {
   examNotRunning: 409,
   examRunning: 409,
   examOutOfOrder: 409,
@@ -47,8 +47,13 @@ const EXAM_STATUS = {
   examLocked: 409,
   examPaused: 409,
   examNotPaused: 409,
+  examOpen: 409,
+  examDone: 409,
   emptyScope: 400,
+  badMode: 400,
   badAnswer: 400,
+  badAnswers: 400,
+  badSense: 400,
   badLang: 400,
   wordNotFound: 404,
 };
@@ -93,18 +98,6 @@ const senseList = (e) =>
   e.senses.length
     ? e.senses
     : [{ level: e.difficulty, definition: null, chinese: e.chinese ?? null, example: e.example, checked: e.checked }];
-
-const senseTarget = (e, sense, i) => ({
-  word: e.word,
-  sense: i,
-  count: senseList(e).length,
-  chapter: e.chapter,
-  level: sense.level,
-  definition: sense.definition || e.definition,
-  chinese: sense.chinese ?? e.chinese ?? null,
-  example: sense.example,
-  checked: sense.checked,
-});
 
 function readEntries(store) {
   const { entries, errors, stats } = parse(store.readFile());
@@ -181,7 +174,7 @@ function serveStatic(name, res) {
   fs.createReadStream(abs).pipe(res);
 }
 
-export function createApp({ store, config, ai, settings, exam, openFile, cefr }) {
+export function createApp({ store, config, ai, settings, session, openFile, cefr }) {
   const openInEditor = (file) =>
     openFile
       ? openFile(file)
@@ -192,13 +185,13 @@ export function createApp({ store, config, ai, settings, exam, openFile, cefr })
           resolve();
         });
   const grades = cefr || createCefr({ dataFile: config.cefrFile });
-  const examRunner =
-    exam ||
+  const sessionRunner =
+    session ||
     (ai
-      ? createExam({
+      ? createSession({
           store,
           ai,
-          stateFile: createStateFile({ file: path.join(config.stateDir || path.join(import.meta.dirname, '.state'), 'exam.json') }),
+          stateFile: createStateFile({ file: path.join(config.stateDir || path.join(import.meta.dirname, '.state'), 'session.json') }),
         })
       : null);
   const settingsStore =
@@ -238,52 +231,31 @@ export function createApp({ store, config, ai, settings, exam, openFile, cefr })
 
     '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
 
-    '/api/exam': () => {
-      if (!examRunner) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
-      const state = examRunner.status();
+    '/api/session': () => {
+      if (!sessionRunner) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
+      const state = sessionRunner.status();
       return {
         status: 200,
-        body: { state, current: examRunner.current(), preview: state ? examRunner.preview() : null },
+        body: {
+          state,
+          current: sessionRunner.current(),
+          study: sessionRunner.study(),
+          preview: state ? sessionRunner.preview() : null,
+        },
       };
-    },
-
-    '/api/random': (req, url) => {
-      const raw = url.searchParams.get('count') ?? '1';
-      const count = Number(raw);
-      if (!Number.isInteger(count) || count < 1 || count > 50) {
-        throw httpError(400, 'badCount', 'count 必须是 1 到 50 的整数');
-      }
-      const onlyUnchecked = ['1', 'true'].includes(url.searchParams.get('onlyUnchecked') || '');
-      const rawDifficulty = url.searchParams.get('difficulty');
-      const difficulty = rawDifficulty ? normalizeDifficulty(rawDifficulty) : null;
-      if (rawDifficulty && !difficulty) throw httpError(400, 'badDifficulty', `难度必须属于 CEFR 六档：${rawDifficulty}`);
-
-      const pool = readEntries(store).entries.flatMap((e) =>
-        senseList(e).map((sense, i) => senseTarget(e, sense, i)),
-      );
-      const filtered = pool.filter((t) => {
-        if (difficulty && t.level !== difficulty) return false;
-        if (onlyUnchecked && t.checked) return false;
-        return true;
-      });
-      for (let i = filtered.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [filtered[i], filtered[j]] = [filtered[j], filtered[i]];
-      }
-      return { status: 200, body: { targets: filtered.slice(0, count) } };
     },
 
   };
 
-  async function examCall(req, fn) {
-    if (!examRunner) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
+  async function sessionCall(req, fn) {
+    if (!sessionRunner) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
     const body = await readJson(req);
     try {
       return { status: 200, body: await fn(body) };
     } catch (e) {
-      if (EXAM_STATUS[e.code]) throw httpError(EXAM_STATUS[e.code], e.code, e.message);
+      if (SESSION_STATUS[e.code]) throw httpError(SESSION_STATUS[e.code], e.code, e.message);
       if (AI_STATUS[e.code]) throw httpError(AI_STATUS[e.code], e.code, e.message);
-      throw httpError(500, 'examInternal', e.message);
+      throw httpError(500, 'sessionInternal', e.message);
     }
   }
 
@@ -605,33 +577,37 @@ export function createApp({ store, config, ai, settings, exam, openFile, cefr })
       });
     },
 
-    '/api/exam/start': (req) =>
-      examCall(req, async (body) => {
-        const state = await examRunner.start(body);
-        return { state, current: examRunner.current() };
+    '/api/session/start': (req) =>
+      sessionCall(req, async (body) => {
+        const state = await sessionRunner.start(body);
+        return { state, current: sessionRunner.current(), study: sessionRunner.study() };
       }),
 
-    '/api/exam/answer': (req) => examCall(req, (body) => examRunner.answer(body)),
+    '/api/session/study/next': (req) => sessionCall(req, () => sessionRunner.nextStudy()),
 
-    '/api/exam/skip': (req) => examCall(req, (body) => examRunner.skip(body.word, body.sense)),
+    '/api/session/answer': (req) => sessionCall(req, (body) => sessionRunner.answer(body)),
 
-    '/api/exam/reveal': (req) => examCall(req, (body) => examRunner.reveal(body.word, body.sense)),
+    '/api/session/next': (req) => sessionCall(req, () => sessionRunner.advance()),
 
-    '/api/exam/lang': (req) => examCall(req, (body) => examRunner.setLang(body.lang)),
+    '/api/session/skip': (req) => sessionCall(req, (body) => sessionRunner.skip(body.word, body.sense)),
 
-    '/api/exam/pause': (req) => examCall(req, () => examRunner.pause()),
+    '/api/session/reveal': (req) => sessionCall(req, (body) => sessionRunner.reveal(body.word)),
 
-    '/api/exam/resume': (req) =>
-      examCall(req, async () => {
-        const res = await examRunner.resume();
-        return { ...res, state: examRunner.status(), current: examRunner.current() };
+    '/api/session/lang': (req) => sessionCall(req, (body) => sessionRunner.setLang(body.lang)),
+
+    '/api/session/pause': (req) => sessionCall(req, () => sessionRunner.pause()),
+
+    '/api/session/resume': (req) =>
+      sessionCall(req, async () => {
+        const res = await sessionRunner.resume();
+        return { ...res, state: sessionRunner.status(), current: sessionRunner.current(), study: sessionRunner.study() };
       }),
 
-    '/api/exam/preview': (req) => examCall(req, () => examRunner.preview()),
+    '/api/session/preview': (req) => sessionCall(req, () => sessionRunner.preview()),
 
-    '/api/exam/commit': (req) => examCall(req, () => examRunner.commit()),
+    '/api/session/commit': (req) => sessionCall(req, () => sessionRunner.commit()),
 
-    '/api/exam/abort': (req) => examCall(req, () => examRunner.abort()),
+    '/api/session/abort': (req) => sessionCall(req, () => sessionRunner.abort()),
 
     '/api/settings': async (req) => {
       const body = await readJson(req);

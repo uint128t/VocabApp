@@ -14,173 +14,193 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header>
-      <h1>Vocabulary 助手</h1>
-      <div class="head-right">
-        <span id="keyFlag" class="key-flag" hidden>.env 里没有密钥</span>
-        <label>模型 <select id="model" data-no-empty="1"></select></label>
-        <button id="themeBtn" class="theme-btn" type="button" title="切换深浅色">主题</button>
-        <button id="reload" type="button">重新读取</button>
-      </div>
-    </header>
-
-    <nav class="tabs">
-      <button class="tab active" type="button" data-panel="add">加词</button>
-      <button class="tab" type="button" data-panel="fill">词表</button>
-      <button class="tab" type="button" data-panel="quiz">自测</button>
-      <button class="tab" type="button" data-panel="exam">整测</button>
-      <button class="tab" type="button" data-panel="settings">设置</button>
-    </nav>
-
-    <main>
-      <section id="panel-add" class="panel active">
-        <textarea id="words" rows="3" placeholder="一行一个，或用逗号分隔：attic, s'mores, take ... for granted"></textarea>
-        <div class="toolbar add-actions">
-          <label><input id="withChinese" type="checkbox" /> 附中文释义</label>
-          <button id="draftBtn" type="button">生成草稿</button>
-          <button id="commitAll" type="button">写入全部</button>
-          <button id="clearCards" type="button">清空卡片</button>
-          <span id="addHint" class="count"></span>
+    <div class="shell">
+      <aside class="side">
+        <div class="brand">
+          <b>Vocabulary 助手</b>
+          <span>手工词表 · 本地工具</span>
         </div>
-        <div id="cards" class="cards"></div>
-      </section>
 
-      <section id="panel-quiz" class="panel">
-        <div class="toolbar">
-          <input id="quizWord" type="search" placeholder="输入词头后回车，或随机抽一个" />
-          <button id="startWord" type="button">就考这个</button>
-          <button id="pickBtn" type="button">随机抽一个</button>
-          <label><input id="onlyUnchecked" type="checkbox" checked /> 只从未掌握抽</label>
-          <select id="quizDifficulty" data-all-label="全部难度"><option value="">全部难度</option></select>
-          <label>反馈语言 <select id="quizLang"><option value="zh">中文</option><option value="en">English</option></select></label>
-        </div>
-        <div id="quizCard" class="quiz-card" hidden></div>
-      </section>
+        <nav class="nav">
+          <button class="nav-item active" type="button" data-panel="add"><span>加词</span><small>AI 出义项草稿</small></button>
+          <button class="nav-item" type="button" data-panel="fill"><span>词表</span><small>全表与掌握状态</small></button>
+          <button class="nav-item" type="button" data-panel="learn"><span>学习</span><small>先看 10 个生词再测</small></button>
+          <button class="nav-item" type="button" data-panel="review"><span>复习</span><small>抽 30 个熟词复查</small></button>
+          <button class="nav-item" type="button" data-panel="settings"><span>设置</span><small>模型 · 提示词 · 主题</small></button>
+        </nav>
 
-      <section id="panel-fill" class="panel">
-        <div id="stats" class="stats">读取中…</div>
-        <div class="toolbar">
-          <input id="q" type="search" placeholder="搜索词头或释义" />
-          <select id="chapter" data-all-label="全部章节"><option value="">全部章节</option></select>
-          <select id="difficulty" data-all-label="全部难度"><option value="">全部难度</option></select>
-          <select id="mastery">
-            <option value="">掌握状态</option>
-            <option value="checked">义项全掌握</option>
-            <option value="unchecked">还有义项没掌握</option>
-          </select>
-          <button id="selectMode" type="button">复选模式</button>
-          <label class="row-inline selection-only" hidden><input id="selectAll" type="checkbox" /> 全选当前筛选</label>
-          <span id="count" class="count"></span>
-        </div>
-        <div class="fill-actions selection-only" hidden>
-          <span id="selectedCount" class="count">未选中任何词</span>
-          <button id="markChecked" type="button" disabled>标记为已掌握</button>
-          <button id="markUnchecked" type="button" disabled>标记为未掌握</button>
-          <button id="refactorBtn" type="button" disabled>重构选中的词</button>
-          <button id="clearSelection" type="button">清空选择</button>
-          <span id="refactorProgress" class="save-state"></span>
-        </div>
-        <div id="refactorPanel" class="job-result" hidden></div>
-        <ul id="list" class="list"></ul>
-      </section>
+        <div class="overview" id="overview"></div>
+      </aside>
 
-      <section id="panel-exam" class="panel">
-        <div class="toolbar">
-          <select id="examChapter" data-all-label="全部章节"></select>
-          <select id="examDifficulty" data-all-label="全部难度"></select>
-          <select id="examMastery">
-            <option value="">全部词</option>
-            <option value="unchecked">只测还有义项没掌握</option>
-            <option value="checked">只测义项全掌握</option>
-          </select>
-          <input id="examQ" type="search" placeholder="按词或释义缩小范围" />
-          <label>反馈语言 <select id="examLang"><option value="zh">中文</option><option value="en">English</option></select></label>
-          <button id="examStart" type="button">开始整轮自测</button>
-          <button id="examPause" type="button" hidden>暂停</button>
-          <button id="examResume" type="button" hidden>继续本轮</button>
-          <button id="examRestart" type="button" hidden>放弃并重开</button>
-          <button id="examAbort" type="button" hidden>放弃本轮</button>
-          <span id="examProgress" class="count"></span>
-        </div>
-        <div id="examCard" class="quiz-card" hidden></div>
-        <div id="examFeedback" class="job-result" hidden></div>
-        <div id="examResult" class="job-result" hidden></div>
-      </section>
-
-      <section id="panel-settings" class="panel">
-        <div class="settings">
-          <fieldset>
-            <legend>外观与默认</legend>
-            <div class="row">
-              <label>主题
-                <select id="setTheme">
-                  <option value="auto">跟随系统</option>
-                  <option value="light">浅色</option>
-                  <option value="dark">深色</option>
-                </select>
-              </label>
-              <label>反馈语言
-                <select id="setLang">
-                  <option value="zh">中文</option>
-                  <option value="en">English</option>
-                </select>
-              </label>
-            </div>
-            <p class="hint">主题与语言在这里保存后，头部按钮只做快速循环；判定面板仍可对单次提问临时改语言。</p>
-          </fieldset>
-
-          <fieldset>
-            <legend>模型</legend>
-            <div class="row">
-              <label>默认模型 <select id="setModel" data-no-empty="1"></select></label>
-              <input id="newModel" type="text" placeholder="模型名，如 glm-4.5" />
-              <input id="newModelUrl" type="text" placeholder="接入点 https://…（必填）" />
-              <input id="newModelExtra" type="text" placeholder='附加参数 JSON（可选）' />
-              <label>密钥 <select id="newModelKey" data-no-empty="1"></select></label>
-              <button id="addModel" type="button">添加</button>
-            </div>
-            <div class="row" id="modelList"></div>
-            <div class="row">
-              <button id="testModel" type="button">测试连通</button>
-              <button id="openEnv" type="button">打开 .env</button>
-              <button id="openSettings" type="button">打开 settings.json</button>
-              <span id="testResult" class="save-state"></span>
-            </div>
-            <p class="hint">
-              模型全部平级地保存在 <code>settings.json</code>（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数，
-              没有 .env 默认接入点。<code>.env</code> 只放密钥、<code>VOCAB_FILE</code> 和 <code>PORT</code>：
-              每把密钥用 <code>VOCAB_KEY_名字=…</code> 声明，界面只选名字、不读取也不写入密钥值。改了
-              <code>.env</code> 要重启服务才会生效。
-            </p>
-          </fieldset>
-
-          <fieldset>
-            <legend>提示词（只替换描述段，输出格式由固定契约保证）</legend>
-            <label>补齐义项（加词草稿与逐词重构共用）
-              <textarea id="promptEntry" rows="4"></textarea>
-            </label>
-            <div class="row">
-              <button type="button" class="reset-prompt" data-prompt="entry">恢复默认</button>
-              <code class="contract" id="contractEntry"></code>
-            </div>
-            <label>自测判定
-              <textarea id="promptJudge" rows="4"></textarea>
-            </label>
-            <div class="row">
-              <button type="button" class="reset-prompt" data-prompt="judge">恢复默认</button>
-              <code class="contract" id="contractJudge"></code>
-            </div>
-            <p class="hint">清空文本域等于恢复默认。契约行（JSON 结构、字段名、CEFR 枚举、原样回显）永远追加在最后，改不掉。</p>
-          </fieldset>
-
-          <div class="row">
-            <button id="saveSettings" type="button">保存设置</button>
-            <button id="resetSettings" type="button">全部恢复默认</button>
-            <span id="saveState" class="save-state"></span>
+      <div class="main">
+        <header class="topbar">
+          <h1 id="panelTitle">加词</h1>
+          <div class="topbar-tools">
+            <span id="keyFlag" class="key-flag" hidden>.env 里没有密钥</span>
+            <label class="inline-field">模型 <select id="model" data-no-empty="1"></select></label>
+            <button id="themeBtn" class="btn ghost" type="button" title="切换深浅色">主题</button>
+            <button id="reload" class="btn ghost" type="button">重新读取</button>
           </div>
-        </div>
-      </section>
-    </main>
+        </header>
+
+        <main class="content">
+          <section id="panel-add" class="panel active">
+            <div class="block">
+              <textarea id="words" rows="3" placeholder="一行一个，或用逗号分隔：attic, s'mores, take ... for granted"></textarea>
+              <div class="toolbar">
+                <label class="check"><input id="withChinese" type="checkbox" /> 附中文释义</label>
+                <button id="draftBtn" class="btn primary" type="button">生成草稿</button>
+                <button id="commitAll" class="btn" type="button">写入全部</button>
+                <button id="clearCards" class="btn ghost" type="button">清空卡片</button>
+                <span id="addHint" class="count"></span>
+              </div>
+            </div>
+            <div id="cards" class="cards"></div>
+          </section>
+
+          <section id="panel-fill" class="panel">
+            <div id="stats" class="stats"></div>
+            <div class="toolbar">
+              <input id="q" class="search" type="search" placeholder="搜索词头或释义" />
+              <select id="chapter" data-all-label="全部章节"><option value="">全部章节</option></select>
+              <select id="difficulty" data-all-label="全部难度"><option value="">全部难度</option></select>
+              <select id="mastery">
+                <option value="">掌握状态</option>
+                <option value="checked">义项全掌握</option>
+                <option value="unchecked">还有义项没掌握</option>
+              </select>
+              <span class="spacer"></span>
+              <span id="count" class="count"></span>
+              <button id="selectMode" class="btn" type="button">复选模式</button>
+            </div>
+            <div class="actionbar selection-only" hidden>
+              <span id="selectedCount" class="count">未选中任何词</span>
+              <span class="spacer"></span>
+              <label class="check selection-only" hidden><input id="selectAll" type="checkbox" /> 全选当前筛选</label>
+              <button id="markChecked" class="btn" type="button" disabled>标记为已掌握</button>
+              <button id="markUnchecked" class="btn" type="button" disabled>标记为未掌握</button>
+              <button id="refactorBtn" class="btn" type="button" disabled>重构选中的词</button>
+              <button id="clearSelection" class="btn ghost" type="button">清空选择</button>
+              <span id="refactorProgress" class="save-state"></span>
+            </div>
+            <div id="refactorPanel" class="job-result" hidden></div>
+            <ul id="list" class="list"></ul>
+          </section>
+
+          <section id="panel-learn" class="panel">
+            <div class="toolbar">
+              <label class="inline-field">反馈语言
+                <select id="learnLang"><option value="zh">中文</option><option value="en">English</option></select>
+              </label>
+              <span id="learnProgress" class="count"></span>
+              <span class="spacer"></span>
+              <button id="learnStart" class="btn primary" type="button">开始学习</button>
+              <button id="learnPause" class="btn" type="button" hidden>暂停</button>
+              <button id="learnResume" class="btn primary" type="button" hidden>继续本轮</button>
+              <button id="learnRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
+              <button id="learnAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
+            </div>
+            <p class="hint">抽 10 个还有义项没掌握的词：先一个一个把整词的义项与例句看一遍，看完再闭卷测这一轮，通过的义项进结算清单。</p>
+            <div id="learnCard" class="quiz-card" hidden></div>
+            <div id="learnFeedback" class="job-result" hidden></div>
+            <div id="learnResult" class="job-result" hidden></div>
+          </section>
+
+          <section id="panel-review" class="panel">
+            <div class="toolbar">
+              <label class="inline-field">反馈语言
+                <select id="reviewLang"><option value="zh">中文</option><option value="en">English</option></select>
+              </label>
+              <span id="reviewProgress" class="count"></span>
+              <span class="spacer"></span>
+              <button id="reviewStart" class="btn primary" type="button">开始复习</button>
+              <button id="reviewPause" class="btn" type="button" hidden>暂停</button>
+              <button id="reviewResume" class="btn primary" type="button" hidden>继续本轮</button>
+              <button id="reviewRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
+              <button id="reviewAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
+            </div>
+            <p class="hint">抽 30 个整词已掌握的词直接闭卷测，没通过的义项进结算清单等你取消勾选。</p>
+            <div id="reviewCard" class="quiz-card" hidden></div>
+            <div id="reviewFeedback" class="job-result" hidden></div>
+            <div id="reviewResult" class="job-result" hidden></div>
+          </section>
+
+          <section id="panel-settings" class="panel">
+            <div class="settings">
+              <fieldset>
+                <legend>外观与默认</legend>
+                <div class="row">
+                  <label class="inline-field">主题
+                    <select id="setTheme">
+                      <option value="auto">跟随系统</option>
+                      <option value="light">浅色</option>
+                      <option value="dark">深色</option>
+                    </select>
+                  </label>
+                  <label class="inline-field">反馈语言
+                    <select id="setLang">
+                      <option value="zh">中文</option>
+                      <option value="en">English</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="hint">主题与语言在这里保存后，头部按钮只做快速循环；判定面板仍可对单次提问临时改语言。</p>
+              </fieldset>
+
+              <fieldset>
+                <legend>模型</legend>
+                <div class="row">
+                  <label class="inline-field">默认模型 <select id="setModel" data-no-empty="1"></select></label>
+                  <input id="newModel" type="text" placeholder="模型名，如 glm-4.5" />
+                  <input id="newModelUrl" type="text" placeholder="接入点 https://…（必填）" />
+                  <input id="newModelExtra" type="text" placeholder="附加参数 JSON（可选）" />
+                  <label class="inline-field">密钥 <select id="newModelKey" data-no-empty="1"></select></label>
+                  <button id="addModel" class="btn" type="button">添加</button>
+                </div>
+                <div class="row" id="modelList"></div>
+                <div class="row">
+                  <button id="testModel" class="btn" type="button">测试连通</button>
+                  <button id="openEnv" class="btn ghost" type="button">打开 .env</button>
+                  <button id="openSettings" class="btn ghost" type="button">打开 settings.json</button>
+                  <span id="testResult" class="save-state"></span>
+                </div>
+                <p class="hint">
+                  模型全部平级地保存在 <code>settings.json</code>（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数，
+                  没有 .env 默认接入点。<code>.env</code> 只放密钥、<code>VOCAB_FILE</code> 和 <code>PORT</code>：
+                  每把密钥用 <code>VOCAB_KEY_名字=…</code> 声明，界面只选名字、不读取也不写入密钥值。改了
+                  <code>.env</code> 要重启服务才会生效。
+                </p>
+              </fieldset>
+
+              <fieldset>
+                <legend>提示词（只替换描述段，输出格式由固定契约保证）</legend>
+                <label class="stack">补齐义项（加词草稿与逐词重构共用）
+                  <textarea id="promptEntry" rows="4"></textarea>
+                </label>
+                <div class="row">
+                  <button type="button" class="btn ghost reset-prompt" data-prompt="entry">恢复默认</button>
+                  <code class="contract" id="contractEntry"></code>
+                </div>
+                <label class="stack">自测判定
+                  <textarea id="promptJudge" rows="4"></textarea>
+                </label>
+                <div class="row">
+                  <button type="button" class="btn ghost reset-prompt" data-prompt="judge">恢复默认</button>
+                  <code class="contract" id="contractJudge"></code>
+                </div>
+                <p class="hint">清空文本域等于恢复默认。契约行（JSON 结构、字段名、CEFR 枚举、原样回显）永远追加在最后，改不掉。</p>
+              </fieldset>
+
+              <div class="row">
+                <button id="saveSettings" class="btn primary" type="button">保存设置</button>
+                <button id="resetSettings" class="btn ghost" type="button">全部恢复默认</button>
+                <span id="saveState" class="save-state"></span>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
 
     <div id="toast" class="toast" hidden></div>
     <script src="/app.js" type="module"></script>
