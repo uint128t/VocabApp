@@ -1158,8 +1158,9 @@ button:disabled {
     display: none;
   }
 
-  /* 顶栏这两条一律不换行：宽度不够就让它们横向滚，别挤成两行把内容顶下去。
-     不写 flex: none 的话，窄到 420px 以下导航项会被压得把「加词」这样的两字标签也断开。 */
+  /* 顶栏这两条一律不换行，也不靠横向滚动（滚动条自己就占高度）：
+     宽度不够时缩字号与内边距挤进一行，窄到 460px 以下再把概览让给导航。
+     vw 让字号随宽度连续变化，比在几个断点之间跳更稳。 */
   .nav {
     flex-direction: row;
     flex-wrap: nowrap;
@@ -1169,6 +1170,8 @@ button:disabled {
   .nav-item {
     flex: none;
     white-space: nowrap;
+    padding: 6px 8px;
+    font-size: clamp(11px, 3.2vw - 0.6px, 14px);
   }
 
   .nav-item small {
@@ -1179,7 +1182,16 @@ button:disabled {
     margin: 0 0 0 auto;
     flex: none;
     white-space: nowrap;
-    padding: 5px 10px;
+    padding: 4px 9px;
+  }
+
+  .overview .ov-head {
+    font-size: clamp(9.5px, 2.6vw - 1px, 11.5px);
+  }
+
+  .topbar-tools {
+    font-size: clamp(11px, 3.2vw - 0.6px, 14px);
+    gap: 8px;
   }
 
   .overview .ov-row,
@@ -1192,7 +1204,8 @@ button:disabled {
   .topbar {
     position: static;
     flex-wrap: nowrap;
-    overflow-x: auto;
+    padding: 10px 14px;
+    gap: 8px;
   }
 
   .topbar h1,
@@ -1200,8 +1213,13 @@ button:disabled {
     flex: none;
   }
 
+  .topbar h1 {
+    font-size: clamp(12.5px, 3.4vw, 16px);
+  }
+
   .topbar-tools {
     flex-wrap: nowrap;
+    gap: 6px;
   }
 
   /* 窄屏下义项那三个输入框挤一行，每个只剩一百多像素，释义和例句都被截断。
@@ -1212,5 +1230,30 @@ button:disabled {
 
   .sense-row .sense-ex-input {
     flex: 1 1 100%;
+  }
+}
+
+/* 再窄就一层层让位，保证顶栏两条始终是单行、且不出现横向滚动条：
+   先让掉概览（数字在词表的统计砖里也有），再让掉面板名（当前导航项已经写着是哪个面板）。 */
+@media (max-width: 460px) {
+  .overview {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .topbar h1 {
+    display: none;
+  }
+}
+
+@media (max-width: 340px) {
+  .topbar {
+    padding: 10px 10px;
+  }
+
+  /* 只留下拉，把「模型」两个字收起来，省下三十来像素 */
+  .topbar-tools .field-label {
+    display: none;
   }
 }
