@@ -96,6 +96,12 @@ button:not(:disabled):hover {
   border-color: var(--accent);
 }
 
+button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .tabs {
   display: flex;
   gap: 6px;
@@ -189,19 +195,10 @@ main {
   border-bottom: 1px solid #efecea;
 }
 
-.entry.dirty {
-  background: #fff7e6;
-}
-
 .head {
   display: flex;
   align-items: baseline;
   gap: 8px;
-}
-
-.box {
-  width: 1.1em;
-  color: var(--muted);
 }
 
 .entry.checked .word {

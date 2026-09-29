@@ -68,11 +68,14 @@
             <option value="checked">义项全掌握</option>
             <option value="unchecked">还有义项没掌握</option>
           </select>
-          <label class="row-inline"><input id="selectAll" type="checkbox" /> 全选当前筛选</label>
+          <button id="selectMode" type="button">复选模式</button>
+          <label class="row-inline selection-only" hidden><input id="selectAll" type="checkbox" /> 全选当前筛选</label>
           <span id="count" class="count"></span>
         </div>
-        <div class="fill-actions">
+        <div class="fill-actions selection-only" hidden>
           <span id="selectedCount" class="count">未选中任何词</span>
+          <button id="markChecked" type="button" disabled>标记为已掌握</button>
+          <button id="markUnchecked" type="button" disabled>标记为未掌握</button>
           <button id="refactorBtn" type="button" disabled>重构选中的词</button>
           <button id="clearSelection" type="button">清空选择</button>
           <span id="refactorProgress" class="save-state"></span>

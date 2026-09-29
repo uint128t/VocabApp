@@ -9,6 +9,7 @@ import {
   parse,
   planDeleteEntry,
   planInsertEntry,
+  planSetChecked,
   planSetEntry,
   planSetSenseChecked,
   planSetSenses,
@@ -438,6 +439,32 @@ export function createApp({ store, config, ai, settings, exam, openFile, cefr })
       });
     },
 
+    '/api/commit-mastery': async (req) => {
+      const body = await readJson(req);
+      const words = body.words;
+      if (!Array.isArray(words) || !words.length) throw httpError(400, 'badWords', 'words 必须是非空数组');
+      if (typeof body.checked !== 'boolean') throw httpError(400, 'badChecked', 'checked 必须是布尔值');
+      const targets = words.map((raw) => readWord({ word: raw }));
+      return store.enqueue(() => {
+        const text = store.readFile();
+        const edits = [];
+        const skipped = [];
+        let changed = 0;
+        for (const word of targets) {
+          const plan = planSetChecked(text, word, body.checked);
+          if (plan.error) {
+            skipped.push({ word, reason: plan.error.code, message: plan.error.message });
+            continue;
+          }
+          if (plan.noop) continue;
+          edits.push(...plan.edits);
+          changed += 1;
+        }
+        const backup = edits.length ? store.writeWithBackup(applyEdits(text, edits)).backup : null;
+        return { status: 200, body: { changed, skipped, backup } };
+      });
+    },
+
     '/api/commit-edit': async (req) => {
       const body = await readJson(req);
       const word = readWord(body);
@@ -665,7 +692,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     'refreshed-mirror': '已用词表内容刷新本目录那份并重建链接',
   };
   const synced = store.sync();
-  if (synced.action !== 'linked') {
+  if (config.vocabMirror && synced.action !== 'linked') {
     const note = MIRROR_NOTE[String(synced.action).replace(/-(symlink|copied)$/, '')];
     console.log(`词表链接：${synced.action}${note ? `（${note}）` : ''}`);
   }
@@ -678,7 +705,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   createApp({ store, config, ai, settings }).listen(config.port, '127.0.0.1', () => {
     const s = settings.get();
     console.log(`Vocabulary 助手已就绪：http://127.0.0.1:${config.port}`);
-    console.log(`数据源：${config.vocabFile}${config.vocabFile === config.vocabMirror ? '' : `（镜像：${config.vocabMirror}）`}`);
+    console.log(`数据源：${config.vocabFile}${config.vocabMirror ? `（镜像：${config.vocabMirror}）` : '（无镜像）'}`);
     console.log(`生效模型：${s.settings.model || '（未设置，请在设置页选择）'}${s.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
     if (!config.keyNames?.length) console.log('提示：.env 里没有任何 VOCAB_KEY_名字=… 密钥，加词与自测暂不可用');
   });

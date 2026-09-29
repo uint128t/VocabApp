@@ -6,7 +6,7 @@
 
 本目录的 `Vocabulary.md` 是个软链，通到 Obsidian 库里那份真身。两边都能改，读写之前工具会把它们对齐（§2.7）。
 
-`node --test` 是全部测试，192 条。
+`node --test` 是全部测试，201 条。
 
 这份文档是唯一权威规格：数据格式、决策记录（D1–D22）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑，全在里面。接手时读完这一份就够了。它合并了早先的 `Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，那三份已经删除。
 
@@ -25,7 +25,7 @@
 | 面板 | 做什么 |
 |---|---|
 | **加词** | 输入单词（逗号或换行批量）→ 逐张草稿卡（义项列表，四项都可改）→ 单条「写入」或「写入全部」 |
-| **词表** | 全表 + 两套统计 + 筛选；每行可「编辑」「删除」，行内可直接勾选义项；多选后「重构选中的词」 |
+| **词表** | 全表 + 两套统计 + 筛选；平时行内直接勾选义项，打开「复选模式」后可选多个词统一标记掌握状态或重构 |
 | **自测** | 抽一个词或义项 → 遮住释义、显示该义项例句 → 你写英英释义 → AI 判定 → 通过后可勾选这条义项 |
 | **整测** | 按章节、难度、掌握状态、关键词抽一轮，逐条义项出题，每词三条命、可 SKIP，进度可续，跑完出清单一次写盘 |
 | **设置** | 模型（全平级）、两套提示词覆盖与恢复默认、反馈语言、主题 |
@@ -130,6 +130,7 @@
 | D20 | 删掉回填与「重查 CEFR」这类临时需求，词表改为「多选 + 逐词重构」 | 缺例句、缺难度、待规范化筛选，批量回填面板（含 `jobs.js`、`/api/backfill/*`、每批词数设置），以及「重查 CEFR」差异清单，都是当初为存量服务的一次性工具，现在下线；`data/cefr.json` 查表本身保留。词表每行加复选框，可「全选当前筛选」；选中若干词后「重构选中的词」，把该词现有内容（含原始 markdown 行）和查表得到的该词与派生词的参考档位一起交给 AI，返回补齐后的义项与一句改动说明，逐个可勾选、确认后一次写盘一份备份 |
 | D21 | 生成草稿与逐词重构合并成同一个核心，档位由 AI 定、参考词表作为佐证 | `ai.sensesEntry({word, current, referenceLevels, withChinese})` 是唯一入口：`current:null` 就是草稿，带上现有内容就是重构；提示词与契约只有一套（`entry`）。返回 `senses[{level, levelBasis, definition, chinese, example}]`，`levelBasis` 必须如实标注 `reference`（档位取自参考词表）或 `judged`（词表没覆盖、AI 自判）。界面逐行显示「查表定档：CEFR-J B1 · Oxford B2」或「AI 判断（参考：…）」，一眼能看出哪些档位是权威、哪些是模型判断 |
 | D22 | **掌握程度按义项，不按词** | 掌握状态只写在义项行的勾选框上，主行不带框；词级状态是推导值（所有义项都勾才算已掌握）。统计出词数与义项数两套数字；自测与整测的考核单元是「词 + 义项」，出题显示该义项自己的例句与「义项 n/m」，判定时把该义项的例句一并交给模型（否则非核心义项的正确回答会被误判），结算按义项写框。2026-09-29 改版把原先「多义项才写框、单义项状态留在主行」的做法整表迁移成现在这样，迁移脚本用完即删 |
+| D23 | 词表平时只留义项级勾选框，批量操作收进「复选模式」 | 一行里同时挂着多选框、词级 ☑ 和义项框三样东西，读起来吵，也容易点错。改成两副面孔：平时只有义项行自带的框（那是掌握状态的唯一写盘开关），点开「复选模式」才换成词头前的多选框，义项框收起、编辑删除隐去，选中后统一「重构 / 标记为已掌握 / 标记为未掌握」，退出时清空已选。批量改掌握状态走新接口 `POST /api/commit-mastery`，一次写盘一份备份；若让前端循环调 `/api/set-checked`，几十个词会瞬间产生几十份备份，把 20 份的轮转上限冲掉 |
 
 ### 3.1 为什么最小单位是义项
 
@@ -194,7 +195,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 ### 4.3 store.js / config.js / settings.js
 
 - **store.js**：`readFile()`、`writeWithBackup(text)`、`enqueue(fn)`（串行队列）、`listBackups()`、`selfCheck()`、`createStateFile({file})`（原子 JSON 写，用于考试进度与设置）。启动时校验词表存在可写，并做一次 `parse` 自检；失败就拒绝启动并打印错误行号。
-- **config.js**：`loadConfig()` → `{dir, envFile, keys, keyNames, vocabFile, cefrFile, backupDir, settingsFile, stateDir, port}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖的路径类环境变量见 §5。
+- **config.js**：`loadConfig()` → `{dir, envFile, keys, keyNames, vocabFile, vocabMirror, cefrFile, backupDir, settingsFile, stateDir, port}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖的路径类环境变量见 §5。`vocabMirror` 只在 `VOCAB_FILE` 与本目录那份 `Vocabulary.md` 经 `realpath` 比对后确实是同一个文件时才给出，否则为 `null`：指到别处（沙盒副本、换台机器）时镜像必须关掉，否则两边 inode 不同，兜底逻辑会按时间戳把一份的内容盖到另一份上。
 - **settings.js**：`DEFAULTS = {model:null, extraModels:[], lang:'zh', theme:'auto', prompts:{entry:null, judge:null}}`。`patch()` 做白名单校验，非法值报 `400 badSettings`，文件损坏时报 `settingsError` 且不静默覆盖。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应 `.env` 里已有的密钥名），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。
 
 ### 4.4 exam.js（整轮自测）
@@ -261,6 +262,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | `POST /api/commit-delete` | `{word}` | `{word,removed,stats,backup}`；删主行 + 全部义项行，写盘前备份 |
 | `POST /api/judge` | `{word, sense?, userDefinition, userExample, lang?}` | `{pass,reason,suggestion,sense,checked,backup:null}`；**判定本身不写盘**；`storedDefinition` 与 `targetExample` 由服务端自己读取 |
 | `POST /api/set-checked` | `{word, sense?, checked}` | `{ok,word,sense,checked,backup}`；`sense` 缺省 0；状态本就一致时不写盘（`backup:null`） |
+| `POST /api/commit-mastery` | `{words:[...], checked}` | `{changed,skipped:[{word,reason,message}],backup}`；**词级**掌握状态，一次写盘一份备份；查不到的词进 `skipped` 且不影响其余；全都没变化时 `backup:null` |
 | `POST /api/refactor` | `{word, model?}` | `{word,current,senses[],checked,note,referenceLevels,writeable,error}`；只给建议不写盘；词不存在 `404`、无模型 `503` |
 | `POST /api/refactor/commit` | `{items:[{word,senses[],checked?}]}` | `{changed,failed[],backup}`；逐词走 `planSetEntry`，一次写盘一份备份；写不进的词进 `failed` 并带原因 |
 | `GET /api/exam` | — | `{state,current,preview}`；没有进行中的轮次时三者皆 `null` |
@@ -281,7 +283,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 单页五标签（加词 / 词表 / 自测 / 整测 / 设置），无框架、无路由、无构建。右上模型下拉对加词与整测生效，默认取设置里的模型；任何写操作之后都有 toast 提示备份文件名。
 
 - **加词**：单词输入框（支持逗号或换行批量）加「附中文释义」开关，逐个出草稿卡片。草稿卡就是**义项行列表**，与编辑表单同一板块：每行是难度、释义、中文、例句，加上「生成例句」「删除」，行下标注档位依据（「查表定档：CEFR-J B1 · Oxford B2」或「AI 判断（参考：…）」），可「+ 添加义项」。单条「写入」或「**写入全部**」；缺例句或第一条没释义的会跳过并汇总原因。成功后卡片变灰、显示落点章节，词已存在则给「定位到该条」。
-- **词表**：顶部显示「共 N 词 · M 条义项 ｜ 已掌握 x 词 / y 义项 · 未掌握 …」。工具栏是搜索、章节、难度、掌握状态（**义项全掌握 / 还有义项没掌握**），加「全选当前筛选」。每行有多选框、词级勾选标记（☑/☐，由义项推导）、词头、释义、档位 tag，行尾「编辑」「删除」；下方每条义项一行，**行首有自己的勾选框**，点一下即写盘并刷新（没有义项行的条目，那个框是禁用的）。勾选后顶栏显示「已选 N 个词」，筛选变化不影响已选集合。
+- **词表**：顶部显示「共 N 词 · M 条义项 ｜ 已掌握 x 词 / y 义项 · 未掌握 …」。工具栏是搜索、章节、难度、掌握状态（**义项全掌握 / 还有义项没掌握**），加一个「复选模式」开关。平时每行只有词头、释义和词级档位的 tag，下面每条义项行**行首各有自己的勾选框**，点一下即写盘并刷新，那是掌握状态的唯一入口。点开「复选模式」后换一副面孔：义项行的框不再出现，词头前面长出多选框，行尾的「编辑」「删除」也收起来；工具栏出现「全选当前筛选」，底下多一条操作栏（已选 N 个词、标记为已掌握、标记为未掌握、重构选中的词、清空选择）。批量标记走 `POST /api/commit-mastery`，几十个词也只写一次盘、只出一份备份。再点一次「退出复选」回到平时的样子，已选会清空。
 - **多选 + 逐词重构**：选中若干词后点「重构选中的词」，前端逐个调 `POST /api/refactor`（进度显示「重构中 i/N：word」），建议落进下方面板：每行是复选框、词头、旧档 → 新档、新义项逐条（级别/释义/中文/例句）、改动说明、参考档位（含派生词），**默认全勾**。「确认写入」一次写盘一份备份，写不进的词标出原因，完成后刷新列表并清空选择。
 - **单词编辑**：行内表单就是义项列表，每行有自己的勾选框、难度、释义、例句、可选中文，可「+ 添加义项」、逐行删除、逐行「生成例句」，另有一个「全部义项已掌握」批量勾（勾它等于把每行都勾上）。**每行都必须有释义和例句**，缺哪一行会就地提示。词头只读；保存等于一次写盘加一份备份，主行只写词头、每条义项写成自己那一行。词头里多出来的旧式段会在保存时被规范掉。
 - **删除该词**：点一次「删除」变成红色的「确认删除 xxx」，5 秒内再点一次才落盘（超时自动解除，不弹窗）。一次移除主行与全部义项行，写盘前自动备份，toast 给备份文件名。整测跑到一半删掉的词不会卡住结算。
@@ -336,13 +338,14 @@ PORT=5317
 
 ## 6. 测试
 
-`node --test`，零依赖，192 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读本目录的 `Vocabulary.md`（走链接读到真身），**测试不写真实词表**。
+`node --test`，零依赖，201 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读本目录的 `Vocabulary.md`（走链接读到真身），**测试不写真实词表**。
 
 | 文件 | 数量 | 覆盖 |
 |---|---|---|
 | `test/vocab.test.js` | 35 | 无损往返（读真实词表逐字节校验主行与每条义项行）、`sortKey` 边界、插入位置与新建章节、**只接受新格式**（带框主行/无框义项行/`[]`/`·` 子行/孤儿子行都报错）、义项级勾选（单条/批量/词级）、`planSetEntry`（含只改第一条不丢义项）、`planSetSenses`、`planDeleteEntry`、`applyEdits` 重叠与越界拒绝、CRLF 保持 |
 | `test/ai.test.js` | 31 | 容错解析（裸 JSON / 围栏 / 前后带话 / 数组包裹）、重试策略（429 两次后成功、400 不重试）、义项契约（废数据丢弃、最多三条、`levelBasis` 归一）、判定规则与语言、`targetExample` 传参、考试模式只回代码、例句生成与校验 |
-| `test/server.test.js` | 54 | 全部路由的成功/校验/错误映射、密钥不外泄、`senses[].checked` 与词级 `checked`、判定义项、勾选义项写盘、整测一条完整轮次、重构与批量写盘、路径穿越与请求体上限 |
+| `test/server.test.js` | 57 | 全部路由的成功/校验/错误映射、密钥不外泄、`senses[].checked` 与词级 `checked`、判定义项、勾选义项写盘、批量标记掌握（一次写盘一份备份、跳过未知词、无变化不写盘）、整测一条完整轮次、重构与批量写盘、路径穿越与请求体上限 |
+| `test/config.test.js` | 6 | `.env` 解析、密钥与端口与路径覆盖、`vocabMirror` 的开关判据（同一文件才开、指到别处或目标不存在就关掉） |
 | `test/exam.test.js` | 26 | 队列冻结与筛选、**每个义项独立出题**、三次机会、上游失败不消耗次数、乱序拒绝、reveal 锁、preview/commit（含中途删词跳过）、断点续测、旧版本状态文件被忽略、暂停/继续/放弃、语言切换 |
 | `test/cefr.test.js` | 17 | 括号剥离、词形归并、**词根推测（两轮剥前缀后缀、根不在表里就表外）**、常用度兜底、表外不猜、真实词表全量跑（命中率下限）、数据文件自检 |
 | `test/settings.test.js` | 13 | 白名单校验、未知提示词键被忽略、模型归一化、默认值 |
@@ -350,7 +353,7 @@ PORT=5317
 
 **人工端到端**（改完代码**必须重启服务**，Node 不热加载）：真 key 冒烟 1 词草稿加 1 次判定；沙盒副本上跑加词、整测、勾选、删除、重构各一条完整路径，`diff` 副本与原文件核对只有目标行变化，最后删副本。
 
-沙盒配方（已验证）：把 `VOCAB_FILE`、`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR` 全指到 `%TEMP%/vocab-*` 里的副本，`PORT=5318`，跑完 `diff` 再删。
+沙盒配方（已验证）：把 `VOCAB_FILE`、`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR` 全指到 `%TEMP%/vocab-*` 里的副本，`PORT=5318`，跑完 `diff` 再删。镜像不必手动关：`VOCAB_FILE` 一指到副本，`vocabMirror` 判定两边不是同一个文件，自动变 `null`，真表不会被兜底逻辑碰到（启动日志会写「（无镜像）」）。
 
 ---
 

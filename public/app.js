@@ -299,13 +299,13 @@ async function setSenseChecked(word, index, checked, box) {
   }
 }
 
+// 词表行有两副面孔。正常模式只留义项行自带的勾选框（那是写盘开关）；
+// 复选模式下义项行不出框、词头前面出一个多选框，行尾的编辑/删除一并收起。
+let selectionMode = false;
+
 function entryNode(e) {
   const li = document.createElement('li');
   li.className = text('entry', e.checked && 'checked');
-
-  const box = document.createElement('span');
-  box.className = 'box';
-  box.textContent = e.checked ? '☑' : '☐';
 
   const word = document.createElement('span');
   word.className = 'word';
@@ -315,15 +315,17 @@ function entryNode(e) {
   def.className = 'def';
   def.textContent = e.definition || '（缺释义）';
 
-  const pick = document.createElement('input');
-  pick.type = 'checkbox';
-  pick.className = 'pick';
-  pick.checked = selected.has(e.word);
-  pick.addEventListener('change', () => toggleSelected(e.word, pick.checked));
-
   const head = document.createElement('div');
   head.className = 'head';
-  head.append(pick, box, word, def);
+  if (selectionMode) {
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    pick.className = 'pick';
+    pick.checked = selected.has(e.word);
+    pick.addEventListener('change', () => toggleSelected(e.word, pick.checked));
+    head.append(pick);
+  }
+  head.append(word, def);
   if (e.chinese) {
     const zh = document.createElement('span');
     zh.className = 'zh';
@@ -382,7 +384,7 @@ function entryNode(e) {
       });
   });
 
-  head.append(edit, del);
+  if (!selectionMode) head.append(edit, del);
 
   li.append(head);
 
@@ -391,13 +393,15 @@ function entryNode(e) {
     const row = document.createElement('div');
     row.className = text('child', !sense.example && 'empty');
 
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    check.className = 'sense-check';
-    check.checked = Boolean(sense.checked);
-    check.title = senses.length > 1 ? `第 ${i + 1} 条义项是否掌握` : '是否已掌握';
-    check.addEventListener('change', () => setSenseChecked(e.word, i, check.checked, check));
-    row.append(check);
+    if (!selectionMode) {
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.className = 'sense-check';
+      check.checked = Boolean(sense.checked);
+      check.title = senses.length > 1 ? `第 ${i + 1} 条义项是否掌握` : '是否已掌握';
+      check.addEventListener('change', () => setSenseChecked(e.word, i, check.checked, check));
+      row.append(check);
+    }
 
     if (senses.length > 1 && sense.level) {
       const tag = document.createElement('span');
@@ -858,7 +862,8 @@ function syncSelection() {
   $('#selectedCount').textContent = selected.size
     ? `已选 ${selected.size} 个词${inView !== selected.size ? `（当前筛选里 ${inView} 个）` : ''}`
     : '未选中任何词';
-  $('#refactorBtn').disabled = selected.size === 0;
+  const none = selected.size === 0;
+  for (const id of ['#markChecked', '#markUnchecked', '#refactorBtn']) $(id).disabled = none;
   $('#selectAll').checked = shown.length > 0 && shown.every((e) => selected.has(e.word));
 }
 
@@ -866,6 +871,39 @@ function toggleSelected(word, on) {
   if (on) selected.add(word);
   else selected.delete(word);
   syncSelection();
+}
+
+function setSelectionMode(on) {
+  selectionMode = on;
+  if (!on) selected.clear();
+  const btn = $('#selectMode');
+  btn.textContent = on ? '退出复选' : '复选模式';
+  btn.classList.toggle('active', on);
+  for (const el of document.querySelectorAll('.selection-only')) el.hidden = !on;
+  renderList();
+}
+
+async function markSelection(checked) {
+  const words = [...selected];
+  if (!words.length) return;
+  const btns = ['#markChecked', '#markUnchecked', '#refactorBtn'].map((id) => $(id));
+  for (const b of btns) b.disabled = true;
+  try {
+    const res = await api('/api/commit-mastery', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ words, checked }),
+    });
+    await loadEntries();
+    const done = checked ? '标记为已掌握' : '标记为未掌握';
+    const skipped = res.skipped.length ? `，跳过 ${res.skipped.map((s) => s.word).join('、')}` : '';
+    const tail = res.backup ? `备份 ${res.backup}` : '状态没变，未写盘';
+    toast(`已${done} ${res.changed} 个词${skipped} · ${tail}`, res.skipped.length ? 'bad' : 'ok');
+  } catch (e) {
+    toast(`批量标记失败：${e.message}`, 'bad');
+  } finally {
+    syncSelection();
+  }
 }
 
 function refactorRow(item) {
@@ -1681,6 +1719,9 @@ $('#clearSelection').addEventListener('click', () => {
   selected.clear();
   renderList();
 });
+$('#selectMode').addEventListener('click', () => setSelectionMode(!selectionMode));
+$('#markChecked').addEventListener('click', () => markSelection(true));
+$('#markUnchecked').addEventListener('click', () => markSelection(false));
 $('#refactorBtn').addEventListener('click', refactorSelection);
 $('#draftBtn').addEventListener('click', draftWords);
 $('#commitAll').addEventListener('click', commitAllCards);

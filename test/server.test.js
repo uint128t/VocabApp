@@ -1070,3 +1070,54 @@ test('POST /api/refactor/commit reports unwritable words, skips noops and valida
     { word: 'absorb', reason: 'badDefinition', message: '义项释义不能为空或含换行' },
   ]);
 });
+
+test('POST /api/commit-mastery checks several words in one write with a single backup', async () => {
+  const { base, file, dir } = await start(CEFR_FIXTURE);
+  const before = fs.readFileSync(file, 'utf8');
+  assert.ok(before.includes('- absorb\n  - [ ] #B1 - take in - Plants absorb water.'));
+
+  const res = await post(base, '/api/commit-mastery', { words: ['absorb', 'wordy'], checked: true });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.changed, 2);
+  assert.deepEqual(res.body.skipped, []);
+  assert.match(res.body.backup, /^Vocabulary\./);
+
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes('- absorb\n  - [x] #B1 - take in - Plants absorb water.'));
+  assert.ok(text.includes('- wordy\n  - [x] #B2 - using too many words - His essay was wordy and dull.'));
+  assert.ok(text.includes('- cliché\n  - [x] #C1 - overused phrase - His speech was full of clichés.'));
+  assert.equal(text.split('\n').length, before.split('\n').length);
+
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
+});
+
+test('POST /api/commit-mastery clears boxes in bulk too', async () => {
+  const { base, file, dir } = await start(CEFR_FIXTURE);
+  const res = await post(base, '/api/commit-mastery', { words: ['cliché'], checked: false });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.changed, 1);
+  assert.ok(fs.readFileSync(file, 'utf8').includes('- cliché\n  - [ ] #C1 - overused phrase - His speech was full of clichés.'));
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
+});
+
+test('POST /api/commit-mastery skips unknown words, reports noops, and validates its payload', async () => {
+  const { base, file, dir } = await start(CEFR_FIXTURE);
+  const res = await post(base, '/api/commit-mastery', { words: ['nope', 'absorb'], checked: true });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.changed, 1);
+  assert.deepEqual(res.body.skipped, [{ word: 'nope', reason: 'wordNotFound', message: '未找到词头：nope' }]);
+  assert.match(res.body.backup, /^Vocabulary\./);
+
+  const before = fs.readFileSync(file);
+  const again = await post(base, '/api/commit-mastery', { words: ['absorb'], checked: true });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.changed, 0);
+  assert.equal(again.body.backup, null);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
+
+  assert.equal((await post(base, '/api/commit-mastery', {})).status, 400);
+  assert.equal((await post(base, '/api/commit-mastery', { words: [] })).status, 400);
+  assert.equal((await post(base, '/api/commit-mastery', { words: ['absorb'], checked: 'yes' })).status, 400);
+  assert.equal((await post(base, '/api/commit-mastery', { words: ['absorb', ''], checked: true })).status, 400);
+});
