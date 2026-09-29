@@ -192,6 +192,16 @@ export function createAi({
     }
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== 'string') throw aiError('aiShape', '上游响应里没有 message.content');
+    // 空内容多半是上游一次坏生成（推理段吃光预算、网关抽风），也可能是模型在「想」而不是在答。
+    // 这里单独认出来，交给 chat() 的去重试分支；当成解析失败抛出去就白丢一次重试机会。
+    if (!content.trim()) {
+      const choice = data.choices[0] || {};
+      const message = choice.message || {};
+      throw aiError(
+        'aiEmpty',
+        `上游返回了空内容（finish_reason=${choice.finish_reason ?? '?'}，推理段 ${String(message.reasoning_content || '').length} 字，用量 ${JSON.stringify(data.usage ?? {})}）`,
+      );
+    }
     return content;
   }
 
@@ -211,13 +221,24 @@ export function createAi({
     }
   }
 
+  // 要一份 JSON：容错解析接不住的就再要一次（一次坏生成不值得记成判定失败），
+  // 顺手把原始内容打到服务窗口，免得下次又只能看到一个截断的报错。
+  async function askJson(messages, opts) {
+    const first = await chat(messages, opts);
+    const obj = parseJsonTolerant(first);
+    if (obj !== null) return { obj, content: first };
+    console.error(`[ai] 模型没吐出可解析的 JSON，再要一次：${String(first).slice(0, 300)}`);
+    const second = await chat(messages, opts);
+    return { obj: parseJsonTolerant(second), content: second };
+  }
+
   async function judgeEntry({ word, userDefinition, userExample, storedDefinition, targetExample }, { model, lang, exam } = {}) {
     const example = typeof userExample === 'string' ? userExample.trim() : '';
     const parts = [system('judge', judgeInstructions(lang))];
     if (!example) parts.push(NO_EXAMPLE_NOTE);
     if (exam) parts.push(EXAM_RULES.join(' '));
     parts.push(CONTRACTS.judge);
-    const content = await chat(
+    const { obj, content } = await askJson(
       [
         { role: 'system', content: parts.join(' ') },
         {
@@ -231,9 +252,8 @@ export function createAi({
           }),
         },
       ],
-      { model, maxTokens: 800, temperature: 0 },
+      { model, maxTokens: 1600, temperature: 0 },
     );
-    const obj = parseJsonTolerant(content);
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
       throw aiError('aiJson', `模型没有返回可用 JSON：${String(content).slice(0, 200)}`);
     }
@@ -262,14 +282,13 @@ export function createAi({
   }
 
   async function exampleEntry(word, definition, { model } = {}) {
-    const content = await chat(
+    const { obj, content } = await askJson(
       [
         { role: 'system', content: `${EXAMPLE_RULES} ${CONTRACTS.example}` },
         { role: 'user', content: `word: ${word}\nmeaning: ${typeof definition === 'string' ? definition.trim() : ''}` },
       ],
-      { model, maxTokens: 120, temperature: 0 },
+      { model, maxTokens: 400, temperature: 0 },
     );
-    const obj = parseJsonTolerant(content);
     const raw = obj && typeof obj === 'object' && !Array.isArray(obj) ? obj.example : null;
     const example = cleanField(typeof raw === 'string' ? raw : '');
     if (!example) throw aiError('aiField', `模型没有给出可用例句：${String(content).slice(0, 200)}`);
@@ -279,14 +298,13 @@ export function createAi({
   async function sensesEntry({ word, current = null, referenceLevels = null, withChinese = false }, { model } = {}) {
     const keepChinese = Boolean(current && ((current.senses || []).some((s2) => s2.chinese) || current.headChinese));
     const wantChinese = withChinese === true || keepChinese;
-    const content = await chat(
+    let { obj, content } = await askJson(
       [
         { role: 'system', content: `${system('entry', entryInstructions())} ${CONTRACTS.entry}` },
         { role: 'user', content: JSON.stringify({ word, current, referenceLevels, withChinese: wantChinese }) },
       ],
       { model, maxTokens: 1400, temperature: 0 },
     );
-    let obj = parseJsonTolerant(content);
     if (Array.isArray(obj)) obj = { senses: obj };
     if (obj && typeof obj === 'object' && obj.senses && !Array.isArray(obj.senses) && typeof obj.senses === 'object') {
       obj = { ...obj, senses: [obj.senses] };

@@ -163,13 +163,41 @@ test('sensesEntry refuses unusable payloads instead of guessing', async () => {
     ['{"other":true}', 'aiField'],
   ];
   for (const [content, code] of cases) {
-    const { ai } = harness({ responses: [ok(content)] });
+    // 每个用例都多备一份：接不住的那几种会再要一次，重试回来还是不认，才报错。
+    const { ai } = harness({ responses: [ok(content), ok(content)] });
     await assert.rejects(
       ai.sensesEntry({ word: 'absorb' }),
       (e) => e.code === code,
       content,
     );
   }
+});
+
+test('an empty upstream reply is retried instead of being read as a parse failure', async () => {
+  const good = '{"senses":[{"level":"B1","levelBasis":"judged","definition":"deep hole","chinese":"","example":"He fell in."}]}';
+  const { ai, calls, slept } = harness({ responses: [ok(''), ok(good)] });
+  const out = await ai.sensesEntry({ word: 'abyss' });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(slept, [1000]);
+  assert.equal(out.senses.length, 1);
+});
+
+test('an empty upstream reply that never recovers reports the finish reason', async () => {
+  const { ai, calls } = harness({ responses: [ok(''), ok('   '), ok('')] });
+  await assert.rejects(
+    ai.judgeEntry({ word: 'bench', userDefinition: 'a seat' }),
+    (e) => e.code === 'aiEmpty' && /finish_reason/.test(e.message),
+  );
+  assert.equal(calls.length, 3);
+});
+
+test('a reply with no JSON in it is asked for exactly once more', async () => {
+  const { ai, calls } = harness({
+    responses: [ok('I would rather not.'), ok('{"pass":true,"reason":"ok","suggestion":""}')],
+  });
+  const verdict = await ai.judgeEntry({ word: 'bench', userDefinition: 'a seat' });
+  assert.equal(calls.length, 2);
+  assert.equal(verdict.pass, true);
 });
 
 test('judgeEntry returns a normalized verdict and shows the criteria', async () => {
@@ -220,7 +248,7 @@ test('judgeEntry normalizes a stringified pass and tolerates missing prose', asy
 
 test('judgeEntry refuses unusable verdicts instead of guessing', async () => {
   for (const content of ['I think you did fine.', '{"reason":"ok"}', '{"pass":"maybe"}', '{"pass":null}']) {
-    const { ai } = harness({ responses: [ok(content)] });
+    const { ai } = harness({ responses: [ok(content), ok(content)] });
     await assert.rejects(
       ai.judgeEntry({ word: 'bench', userDefinition: 'a seat', userExample: 'Sit on the bench.' }),
       (e) => e.code === 'aiJson' || e.code === 'aiField',
@@ -435,7 +463,7 @@ test('exampleEntry generates one fresh sentence and validates it', async () => {
   assert.match(systemOf(good.calls), /actually inflected form/);
 
   for (const content of ['{"example":"   "}', 'not json at all', '{"other":1}', '[]']) {
-    const bad = harness({ responses: [ok(content)] });
+    const bad = harness({ responses: [ok(content), ok(content)] });
     await assert.rejects(bad.ai.exampleEntry('tranquil', ''), (e) => e.code === 'aiField', content);
   }
 });
