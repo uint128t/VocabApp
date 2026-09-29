@@ -377,12 +377,13 @@ PORT=5317
 
 ### 7.2 追加功能
 
-十一个：单词行内编辑 · 整轮自测（`exam.js`）· 深浅色 · 设置页 + 提示词覆盖 · 模型全平级（D16）· 删除该词（D17）· CEFR 查表（D18）· 多义项（D19）· 多选 + 逐词重构（D20）· 草稿/重构合流（D21）· 义项级掌握（D22）· 词根推测（任务二：`cefr.familyCandidates` 两轮剥前缀/后缀，标签「词根推测自 X」，真表覆盖率 414 → **431/589**）。
+十二个：单词行内编辑 · 整轮自测（`exam.js`）· 深浅色 · 设置页 + 提示词覆盖 · 模型全平级（D16）· 删除该词（D17）· CEFR 查表（D18）· 多义项（D19）· 多选 + 逐词重构（D20）· 草稿/重构合流（D21）· 义项级掌握（D22）· 词根推测（任务二：`cefr.familyCandidates` 两轮剥前缀/后缀，标签「词根推测自 X」，真表覆盖率 414 → **431/589**）。
 
 ### 7.3 待办
 
-1. **任务三 难度 5 次取平均**：只针对 `levelBasis === 'judged'`（词表没覆盖、AI 自判）的义项，按钮触发跑 5 次，把六档折成数字取平均再四舍五入回档，记录一致度（如「AI 5 次均值 C1（4/5 一致）」），先出清单再写盘。
-2. 让 5317 上的长期服务重启一次（关掉 `start.bat` 的窗口再双击一次），改动才会在你平时用的地址生效。另外，勾选状态里相当一部分是早年手工勾的，用「整测」按实际表现重校一遍是最划算的。
+1. **任务三 难度 5 次取平均**：只针对 `levelBasis === 'judged'`（词表没覆盖、AI 自判）的义项，按钮触发跑 5 次，把六档折成数字取平均再四舍五入回档，记录一致度（如「AI 5 次均值 C1（4/5 一致）」），先出清单再写盘。**这是唯一还没动过的功能**（截至 2026-09-30）。
+2. **`public/app.js` 拆分（结构债）**：截至 2026-09-30 仍是 1719 行的单文件，五个面板 + 设置页挤在一个作用域里。按面板拆成 `public/js/{core,fill,cards,quiz,exam,settings}.js` 是纯搬迁、后端单测兜不住前端，所以只能靠浏览器逐面板验收，风险比后端改动大，一直没动。
+3. 勾选状态里相当一部分是早年手工勾的，用「整测」按实际表现重校一遍是最划算的；难度档同理，任务三做完后值得整表过一遍。
 
 ---
 
@@ -398,8 +399,8 @@ C:\Users\Victor\Other\Programs\VocabApp\     ← 代码 + 文档 + 配置（不�
   test/              node --test 的全部用例
   data/              cefr.json + sources/（CEFR 原始清单）
   tools/             build-cefr-data.mjs
-  backups/           写盘前的快照（只留最近 20 份）+ docs/（归档的三份旧文档）
-  .env settings.json start.bat package.json
+  backups/           写盘前的快照（只留最近 20 份）
+  .env settings.json start.bat package.json .gitignore .gitattributes
   Vocabulary.md      ← 软链（symbolic link），指向下面那个真身
 C:\Users\Victor\Other\Notes\Vocabulary.md    ← 真身，Obsidian 库那边只留这一个文件
 ```
@@ -412,7 +413,7 @@ C:\Users\Victor\Other\Notes\Vocabulary.md    ← 真身，Obsidian 库那边只�
   ```
   真断了也不用管：工具下次读/写会按「谁新听谁的」把两边修好——重建软链没权限时会退成硬链（内容一样是同一份，只是少了一层「改名也跟得上」的保险）。
 - **复制到别处**：把文件夹拷过去，**别带那个软链**（拷过去会变成悬空链接）：删掉它，在本地放一份自己的 `Vocabulary.md`，或把 `.env` 里的 `VOCAB_FILE` 指到目标机器上的词表，填上自己的 `VOCAB_KEY_*` 就能独立跑。想连数据一起带走就拷一份真身文件放进目录、留空 `VOCAB_FILE`（默认就用本目录的 `Vocabulary.md`）。
-- **不是 git 仓库**：没有 commit 可用，回滚靠 `backups/`。
+- **是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，**私有**——`data/cefr.json` 与 `data/sources/` 里是 Oxford 3000/5000 与 Phrase List，只有个人自用授权，别转公开（真要公开得先把这批数据摘出去、只留 `tools/build-cefr-data.mjs` 和源清单说明）。首提交 `4ceb470`，分支 `main`。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（软链指向库里的真身，换机器就废）；`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`start.bat` 单独 CRLF。推送认证走 Git Credential Manager（本机已装，`credential.helper=manager`），首次推会弹窗选账号。
 - **数据那边是 Obsidian 库**：用户会同时手改 `Notes\Vocabulary.md` → §2.7 的「外科手术式行编辑」不可省略。
 - **Bash 工具的默认 cwd 指向已失效的旧 OneDrive 路径**，调用 Bash 必须显式传工作目录（现在一般是 `C:\Users\Victor\Other\Programs\VocabApp`）。
 - 权限层（auto mode）会拦：shell 里明文带 key、写含密钥的文件、用 `..` 相对路径访问 vault 内文件。绕行：绝对路径 + `.env` 由服务端读取。
