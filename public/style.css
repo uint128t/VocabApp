@@ -1186,7 +1186,7 @@ button:disabled {
   }
 
   .overview .ov-head {
-    font-size: clamp(9.5px, 2.6vw - 1px, 11.5px);
+    font-size: clamp(9px, 2.6vw - 1px, 11.5px);
   }
 
   .topbar-tools {
@@ -1233,15 +1233,14 @@ button:disabled {
   }
 }
 
-/* 再窄就一层层让位，保证顶栏两条始终是单行、且不出现横向滚动条：
-   先让掉概览（数字在词表的统计砖里也有），再让掉面板名（当前导航项已经写着是哪个面板）。 */
-@media (max-width: 460px) {
+/* 再窄就一层层让位，保证顶栏两条始终单行、且不出现横向滚动条。
+   实测（缩字号之后）概览与面板名一直能扛到 360px 左右，所以阈值就压在这里，
+   不要提前藏——它们大多数时候是塞得下的。 */
+@media (max-width: 360px) {
   .overview {
     display: none;
   }
-}
 
-@media (max-width: 420px) {
   .topbar h1 {
     display: none;
   }
