@@ -1158,8 +1158,17 @@ button:disabled {
     display: none;
   }
 
+  /* 顶栏这两条一律不换行：宽度不够就让它们横向滚，别挤成两行把内容顶下去。
+     不写 flex: none 的话，窄到 420px 以下导航项会被压得把「加词」这样的两字标签也断开。 */
   .nav {
     flex-direction: row;
+    flex-wrap: nowrap;
+    flex: none;
+  }
+
+  .nav-item {
+    flex: none;
+    white-space: nowrap;
   }
 
   .nav-item small {
@@ -1168,7 +1177,8 @@ button:disabled {
 
   .overview {
     margin: 0 0 0 auto;
-    min-width: 0;
+    flex: none;
+    white-space: nowrap;
     padding: 5px 10px;
   }
 
@@ -1181,6 +1191,17 @@ button:disabled {
      面板名与当前导航项重复，模型与主题是设定一次就完的事。 */
   .topbar {
     position: static;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .topbar h1,
+  .topbar-tools {
+    flex: none;
+  }
+
+  .topbar-tools {
+    flex-wrap: nowrap;
   }
 
   /* 窄屏下义项那三个输入框挤一行，每个只剩一百多像素，释义和例句都被截断。
