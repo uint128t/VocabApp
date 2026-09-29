@@ -24,12 +24,12 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-echo [i] Starting Vocabulary helper on port %PORT% ...
-start "Vocabulary Helper" cmd /k "node server.js"
+echo [i] Starting VocabApp on port %PORT% ...
+start "VocabApp" cmd /k "node server.js"
 
-node -e "const u='http://127.0.0.1:'+process.argv[1]+'/api/config';(async()=>{for(let i=0;i<40;i++){try{if((await fetch(u)).ok)process.exit(0)}catch{}await new Promise(r=>setTimeout(r,300))}process.exit(1)})()" %PORT%
+node -e "const u='http://127.0.0.1:'+process.argv[1]+'/api/settings';(async()=>{for(let i=0;i<40;i++){try{if((await fetch(u)).ok)process.exit(0)}catch{}await new Promise(r=>setTimeout(r,300))}process.exit(1)})()" %PORT%
 if errorlevel 1 (
-  echo [X] Startup timed out. Check the "Vocabulary Helper" window for the error.
+  echo [X] Startup timed out. Check the "VocabApp" window for the error.
   exit /b 1
 )
 

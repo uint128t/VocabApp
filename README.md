@@ -1,11 +1,14 @@
 # Vocabulary 助手（VocabApp）
 
-> 一个零依赖的本地 Node 网页工具：以 `Vocabulary.md` 为唯一数据源，用 AI 帮你加词、判定掌握程度、按义项重校整张表。
-> 代码与文档 = 本目录（`C:\Users\Victor\Other\Programs\VocabApp`）· 启动 双击 `start.bat` · 地址 `http://127.0.0.1:5317/`
-> 数据：本目录的 `Vocabulary.md` 是**软链**，指向 `C:\Users\Victor\Other\Notes\Vocabulary.md`（Obsidian 库那边，只留这一个文件）；两边都可以随便改，工具读/写时会自动对齐（见 §2.7）
-> 状态 2026-09-30：**589 词 / 811 条义项**，`node --test` **192 通过**
+本目录躺着一个零依赖的本地 Node 网页工具，围着 `Vocabulary.md` 这张手工攒的英语词汇表转。加词、判定掌握程度、按义项重校整张表，都交给 AI；词汇表本身仍是唯一数据源。
 
-**这份文档是唯一权威规格**——数据格式、决策记录（D1–D22）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑都在这里，接手时读完这一份就够。它合并并取代了原来的三份文档（`Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，归档在 `backups/docs/`，不再维护）。
+双击本目录的 `VocabApp.bat` 启动，浏览器会打开 `http://127.0.0.1:5317/`。
+
+本目录的 `Vocabulary.md` 是个软链，通到 Obsidian 库里那份真身。两边都能改，读写之前工具会把它们对齐（§2.7）。
+
+`node --test` 是全部测试，192 条。
+
+这份文档是唯一权威规格：数据格式、决策记录（D1–D22）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑，全在里面。接手时读完这一份就够了。它合并了早先的 `Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，那三份已经删除。
 
 ---
 
@@ -13,34 +16,23 @@
 
 ### 1.1 它解决什么
 
-`Vocabulary.md` 是手工维护的英语词汇表，随看剧/阅读积累，按字母分章节，用 Obsidian 打开、纯 markdown 存储（本机**不是 git 仓库**，回滚靠本目录的 `backups/`）。手工维护有两个痛点：新词要自己想英英释义、例句、判断难度，成本高；背过的词缺少可检验的客观标准。于是把它们交给 AI，同时让 markdown 保持为唯一数据源——不引入数据库、不引入平行副本，Obsidian 里手改与工具写入必须能共存。
+`Vocabulary.md` 是按首字母分章的纯 markdown 词表，用 Obsidian 打开，遇生词就记一笔。改动有 `backups/` 兜底，目录本身也是 git 仓库，远端在 GitHub（§8）。
+
+手工维护累在两处：每个新词都得自己想英英释义、例句和难度；「背过了」又全凭自我感觉，没有可检验的标准。这两处外包给 AI 之后，markdown 仍要当唯一数据源，于是既不引数据库，也不留平行副本。你在 Obsidian 里手改和工具写盘得能同时存在，整套设计的取舍都从这一条推出来。
 
 ### 1.2 五个面板
 
 | 面板 | 做什么 |
 |---|---|
-| **加词** | 输入单词（逗号/换行批量）→ 逐张草稿卡（义项列表，四项都可改）→ 单条「写入」或「写入全部」 |
+| **加词** | 输入单词（逗号或换行批量）→ 逐张草稿卡（义项列表，四项都可改）→ 单条「写入」或「写入全部」 |
 | **词表** | 全表 + 两套统计 + 筛选；每行可「编辑」「删除」，行内可直接勾选义项；多选后「重构选中的词」 |
-| **自测** | 抽一个词/义项 → 遮住释义、显示该义项例句 → 你写英英释义 → AI 判定 → 通过后可勾选这条义项 |
-| **整测** | 按章节/难度/掌握状态/关键词抽一轮，逐条义项出题，每词三条命、可 SKIP，进度可续，跑完出清单一次写盘 |
+| **自测** | 抽一个词或义项 → 遮住释义、显示该义项例句 → 你写英英释义 → AI 判定 → 通过后可勾选这条义项 |
+| **整测** | 按章节、难度、掌握状态、关键词抽一轮，逐条义项出题，每词三条命、可 SKIP，进度可续，跑完出清单一次写盘 |
 | **设置** | 模型（全平级）、两套提示词覆盖与恢复默认、反馈语言、主题 |
 
 ### 1.3 非目标
 
-不做间隔重复（SRS）、不做统计报表、不做多端同步、不做账号体系、不改掉 Obsidian 手改这条路。
-
-### 1.4 当前规模（2026-09-29 实测）
-
-| 指标 | 值 |
-|---|---|
-| 词条 | 589 |
-| 义项 | 811（单义项 379 · 两条 198 · 三条 12） |
-| 已掌握 | **225 词**（义项全勾） / **320 义项** |
-| 未掌握 | 364 词 / 491 义项 |
-| 缺例句 / 缺难度 / 待规范化 | 0 / 0 / 0 |
-| 义项档位分布 | A1 13 · A2 29 · B1 119 · B2 348 · C1 257 · C2 45 |
-| CEFR 查表覆盖 | 431/589 词命中（含 20 条词根推测），其余显式标「CEFR 表外」 |
-| 文件 | UTF-8 无 BOM · LF 换行 · 84 KB · 解析 0 错误 0 重复 |
+间隔重复、统计报表、多端同步、账号体系都不在范围内。Obsidian 里手改这条路会一直留着。
 
 ---
 
@@ -48,9 +40,9 @@
 
 ### 2.1 整体结构
 
-- 按首字母分章节：`### A`、`### B`…；词组按**整体**首字母归章（`take ... for granted` 归 T，不按第二个词）。
-- 章节内按排序键排：转小写、丢掉所有非字母字符——`s'mores`→`smores`、`a touch of`→`atouchof`、`cliché`→`cliche`，所以 `attic` 落在 `attentive` 之后、`authentic` 之前。
-- 某字母第一次出现词条时才新建该章节，章节之间空一行，文件末尾保留一个空行。
+- 按首字母分章节：`### A`、`### B`……词组按**整体**首字母归章（`take ... for granted` 归 T，不看第二个词）。
+- 章节内按排序键排：转小写、丢掉所有非字母字符。`s'mores` 成了 `smores`，`a touch of` 成了 `atouchof`，`cliché` 成了 `cliche`，所以 `attic` 落在 `attentive` 之后、`authentic` 之前。
+- 某个字母第一次出现词条时才新建该章节，章节之间空一行，文件末尾保留一个空行。
 
 ### 2.2 条目：主行只留词头，一条义项一行
 
@@ -60,96 +52,96 @@
   - [x] #C1 - to fish - He angled his line carefully.
 ```
 
-- **主行**：`- ` + 词头。主行**不带勾选框**——掌握状态全部写在义项行上（见 §2.4）。
-- **义项行**：两个空格缩进 + `- ` + `[ ]`/`[x]` + `#档位` + ` - ` + 释义 +（可选 ` - ` 中文）+ ` - ` + 例句。
-- 义项一律**平级、同一缩进**，行序就是义项顺序，不嵌套、不分层。
-- **每个词至少一条义项行；每条义项必须有释义、档位、例句**。没有义项行就等于整条没有释义，解析直接报错、工具拒绝读取；所以「缺例句 / 缺难度」在这套格式里不存在（统计里这两个数字恒为 0）。
-- **不写词性标注**（2026-09-29 取消）：词头与释义里都不出现 `(v.)`/`(n.)` 这类标签。同一词的不同词性各占一条义项，靠义项区分，不靠括号——`iron (v.)`、`substitute (n.)` 这种写法已取消，现在就是 `iron`（动词义）这样一条词条。
-- AI 建议最多三条义项（手写与编辑不限），最常用在前。
+- **主行**：`- ` 加词头。主行不带勾选框，掌握状态一律写在义项行上（§2.4）。
+- **义项行**：两个空格缩进，接 `- `、`[ ]` 或 `[x]`、`#档位`、` - `、释义，随后可选一段中文、必有一段例句。
+- 义项之间平级、同一缩进。行序就是义项顺序，不嵌套，也不分层。
+- 每个词至少一条义项行，每条义项必须凑齐释义、档位、例句。少了义项行，整条就等于没有释义，解析会报错、工具拒绝读取。「缺例句」和「缺难度」在这套格式里无处容身，统计里那两个数字恒为 0。
+- **不写词性标注**（2026-09-29 取消）。词头与释义里都不出现 `(v.)`、`(n.)` 这类标签。同一个词的不同词性各占一条义项，靠义项区分。`iron (v.)`、`substitute (n.)` 这种写法已经没了，现在就是一条 `iron`。
+- AI 建议最多三条义项（手写与编辑不限），最常用的排在最前。
 
-> **只支持这一种写法**：带框的主行（`- [x] word`）、不带框的义项行（`  - #B1 · …` 或 `  - #B1 - …`）、空框写成 `[]`，一律当语法错误处理。旧表已在 2026-09-29 整表迁移完，代码里不留任何兼容分支。
+> **只认这一种写法**：带框的主行（`- [x] word`）、不带框的义项行（`  - #B1 · …`）、空框写成 `[]`，一律按语法错误处理。旧表在 2026-09-29 整表迁移完毕，代码里没有兼容分支。
 
 ### 2.3 单行规矩
 
-- **释义**：英文、小写开头、**不加句号**、≤8 词、只取一个义项；多义就多开一行义项，不用 `;` 串。释义里不能出现 ` - `（会破坏义项行的分段），也不能为空。
-- **例句**：≤14 词、日常真实语境、句末有句号（实测量 7–10 词），必须用到**词头本身**的屈折形态——`absorbed`、`mows`、`clichés` 可以，`admissible` 不能拿 `inadmissible` 充数。
-- **词头**：一个词一条词条，不同词性写成它的多条义项（不加 `(v.)`/`(n.)` 括号）；词组里替位成分写 `...`，如 `take ... for granted`。
+- **释义**：英文，小写开头，末尾不加句号，不超过 8 个词，一行只装一个意思。多义就多开一行，不用 `;` 串。释义里不能出现 ` - `（那会破坏义项行的分段），也不能为空。
+- **例句**：不超过 14 个词，日常真实语境，句末带句号（实际落在 7–10 词）。必须用到**词头本身**的屈折形态：`absorbed`、`mows`、`clichés` 都行，但 `admissible` 不能拿 `inadmissible` 充数。
+- **词头**：一个词一条词条，不同词性写成它的多条义项。词组里的替位成分写 `...`，如 `take ... for granted`。
 - **中文**：默认不写；需要时作为该义项的最后一段（`- 吸收`）。
-- **分隔符**：段间固定 ` - `（ASCII 连字符，两侧各一空格）；义项行的勾选框与 `#档位` 之间是一个空格。
+- **分隔符**：段间固定 ` - `（ASCII 连字符，两侧各一个空格）。义项行的勾选框与 `#档位` 之间是一个空格。
 
 ### 2.4 勾选语义：状态只写在义项行上（D22 / 2026-09-29 改版）
 
-- 每条义项行自带勾选框：`  - [ ] #B1 - …` 未掌握、`  - [x] #B1 - …` 已掌握。**主行不带框**，也不再有任何「整词的框」需要同步。
-- 词级的掌握状态是**推导出来的**：所有义项都勾 = 这个词已掌握。统计与词表的「义项全掌握 / 还有义项没掌握」筛选都读这个推导值，所以数字天然一致。
-- 没有任何义项行的条目没有地方写状态，勾选会被拒绝（`noSenses`）——先在「编辑」里补一条义项。
-- 每个词独立勾选，近义词、同根词之间不要求一致，工具**不得**成对同步。
+- 每条义项行自带勾选框。`  - [ ] #B1 - …` 是未掌握，`  - [x] #B1 - …` 是已掌握。主行不带框，也就不存在什么「整词的框」需要同步。
+- 词级的掌握状态是**推导出来的**：所有义项都勾上，这个词才算已掌握。统计和词表里「义项全掌握 / 还有义项没掌握」的筛选都读这个推导值，所以两处数字天然一致。
+- 没有义项行的条目无处写状态，勾选会被拒（`noSenses`）。先去「编辑」里补一条义项。
+- 每个词独立勾选，近义词、同根词之间不要求一致，工具也不去成对同步。
 
 ### 2.5 手工加词步骤
 
-确认不重复 → 按排序键插到章节内正确位置 → 主行写 `- 词头` → 紧跟至少一条义项行（`  - [ ] #档位 - 释义 - 例句`）→ 该字母还没有章节就新建 `### X`（前后各空一行）。也完全可以只用工具加词，markdown 是唯一真相，工具每次写盘前都重新读文件、只碰目标行。
+确认不重复，按排序键插到章节内正确的位置，主行写 `- 词头`，紧跟至少一条义项行（`  - [ ] #档位 - 释义 - 例句`）。该字母还没有章节就新建 `### X`，前后各空一行。也完全可以只用工具加词：markdown 是唯一真相，工具每次写盘前重读文件，只碰目标行。
 
 ### 2.6 自查清单
 
 - [ ] 章节内仍是严格字母序，章节标题 `### X` 唯一
 - [ ] 无重复词头
-- [ ] 主行只有词头，没有 `[ ]`/`[x]`
-- [ ] 每词至少一条义项行，每条义项：勾选框 + CEFR 六档档位 + 释义 + 例句，一样都不缺
-- [ ] 每词独立释义，没有同义词链、没有 `[refer to ...]`；词头与释义里都没有 `(v.)`/`(n.)` 这类词性标注
-- [ ] 释义无句号、≤8 词；例句 ≤14 词、用到词头本身的形态、有句号
+- [ ] 主行只有词头，没有 `[ ]`、`[x]`
+- [ ] 每词至少一条义项行；每条义项凑齐勾选框、CEFR 六档档位、释义、例句
+- [ ] 每词独立释义，没有同义词链，没有 `[refer to ...]`；词头与释义里都没有词性标注
+- [ ] 释义不加句号、不超过 8 词；例句不超过 14 词、用到词头本身的形态、末尾有句号
 
 ### 2.7 写盘的硬约束
 
-- **外科手术式行编辑**：每次写 = 重新读磁盘 → 定位目标行 → 生成 `Edit` → 备份 → 原子写（tmp + rename）。解析器不认识的行、章节标题、空行一律不参与序列化，原样保留；**绝不整文件重写重排**。
-- **编码换行**：固定 UTF-8 无 BOM（文件含 `cliché` 等非 ASCII），写前检测现有换行风格并沿用（当前为 LF）。
-- **备份**：写前把旧内容存 `backups/Vocabulary.<ISO 时间>.md`，只保留最近 20 份；文件名带自定义后缀的不会被轮转删除。备份就是撤销入口。
-- **链接感知 + 兜底对齐**（2026-09-29 加）：本目录的 `Vocabulary.md` 是库里头真身的链接，两个位置都能改。工具这边：
-  - **软链**：写前先 `realpath` 解析到真身（否则改名会把链接换成普通文件）；真身被别的编辑器「写临时文件再改名」保存时，软链指向路径、会自动看到新内容，不用修。
-  - **硬链**（`nlink > 1`）：不能用「写临时文件再改名」——改名只换掉一个名字，另一个名字留在旧 inode 上、两边内容会悄悄分叉。这种情况改成原处覆盖写。
-  - **兜底**：每次读/写前 `syncMirror()` 比一下两边是不是同一个文件（`stat.ino`）；不是同一个（被改名式保存打断过）就**谁的时间戳新听谁的**：镜像新就把镜像内容写回真身，否则用真身刷新镜像，然后照原类型重建链接（重建软链要权限，退硬链，再不行退普通副本）。所以链接断了也不会真的分叉，最多是「下一次访问时修一下」。
-  - 单测覆盖了两种写模式、断链双向修复、软链重建；沙盒里也实测过。
+- **外科手术式行编辑**：每次写盘都是重新读磁盘、定位目标行、生成 `Edit`、备份、原子写（tmp + rename）。解析器不认识的行、章节标题、空行都不参与序列化，原样保留。整文件重写重排这种事不会发生。
+- **编码换行**：固定 UTF-8 无 BOM（文件里有 `cliché` 这类非 ASCII 字符），写前检测现有换行风格并沿用（当前是 LF）。
+- **备份**：写前把旧内容存成 `backups/Vocabulary.<ISO 时间>.md`，只留最近 20 份；文件名带自定义后缀的不会被轮转删掉。备份就是撤销入口。
+- **链接感知 + 兜底对齐**（2026-09-29 加）：本目录的 `Vocabulary.md` 是库里头真身的链接，两个位置都能改。工具这边分三种情况处理：
+  - **软链**：写前先 `realpath` 解析到真身，否则改名会把链接换成普通文件。真身被别的编辑器「写临时文件再改名」保存时，软链指向路径，会自动看到新内容，不必修。
+  - **硬链**（`nlink > 1`）：不能用「写临时文件再改名」，因为改名只换掉一个名字，另一个名字留在旧 inode 上，两边内容会悄悄分叉。这种情况改成原处覆盖写。
+  - **兜底**：每次读或写之前，`syncMirror()` 先比两边是不是同一个文件（`stat.ino`）。不是同一个（被改名式保存打断过），就**谁的时间戳新听谁的**：镜像新就把镜像内容写回真身，否则用真身刷新镜像，然后照原类型重建链接。重建软链要权限，权限不够退硬链，再不行退普通副本。链接断了也不会真的分叉，最多是「下一次访问时修一下」。
+  - 单测覆盖了两种写模式、断链双向修复和软链重建，沙盒里也实测过。
 - **写入串行**：进程内单队列，杜绝并发写坏文件。
-- **主行多出来的段只认最后一段**：`- word - a - b` 这种（旧的同义词链残留）会把 `b` 当释义，编辑一次就被改写成规范的两段/裸头形式；工具不再为这类写法做任何特殊处理。
+- **主行多出来的段只认最后一段**：`- word - a - b` 这种（旧同义词链的残留）会把 `b` 当释义，编辑一次就被改写成规范形式。工具不为这类写法做任何特殊处理。
 
 ---
 
 ## 3. 决策记录
 
-只列**现行**规则；已废止的见 3.2。
+只列**现行**规则，已废止的见 3.2。
 
 | # | 决策 | 理由 / 放弃的选项 |
 |---|---|---|
-| D1 | 零依赖 Node 本地服务，只绑 `127.0.0.1` | 需要直接读写本地文件 + 隐藏密钥。放弃纯静态单 HTML（File System Access 权限每次重授、写回不可靠、密钥进浏览器）；放弃 Python 服务（要装依赖，本机 Python 有编码踩坑史） |
-| D2 | 难度用 CEFR 六档 `A1/A2/B1/B2/C1/C2` | 有外部锚点、AI 判定一致性最好、与英英释义体系对齐。放弃考试标签（跨体系归属冲突）与 1–5 星（无锚点） |
+| D1 | 零依赖 Node 本地服务，只绑 `127.0.0.1` | 需要直接读写本地文件，还要把密钥藏住。纯静态单 HTML 的方案放弃了（File System Access 权限每次重授、写回不可靠、密钥落在浏览器里）；Python 服务也放弃了（要装依赖，本机 Python 有编码踩坑史） |
+| D2 | 难度用 CEFR 六档 `A1/A2/B1/B2/C1/C2` | 有外部锚点，AI 判定一致性最好，也与英英释义体系对齐。考试标签跨体系归属会冲突，1–5 星没有锚点，都放弃了 |
 | D3 | 难度与例句放在缩进子行，主行不动 | 现有条目的排序与阅读体验零影响，AI 写入的数据与人工数据物理隔离 |
 | D4 | 外科手术式行编辑，不做全量序列化重写 | 全量重写会把用户手改的、解析器不认识的内容一起覆盖掉 |
-| D5 | 自测判定 PASS **不自动打勾** | 判定只说「对不对」，勾不勾由人点一下「勾选为已掌握」，可再点撤销。避免误判直接改动词表状态 |
-| D7 | 调用路径用 `/chat/completions` | `/responses` 是 OpenAI 专有，DashScope 兼容模式没有；且要求「未来可换模型但保证 openai-compatible」，这是唯一公因子 |
-| D8 | 不依赖 structured outputs | 跨 provider 可移植性优先；改为提示词约束 JSON + 服务端容错解析（剥代码围栏、取首个平衡 `{}`） |
-| D9 | 中文释义默认不生成，但解析/序列化支持 | 做成加词面板的可选开关，零额外架构成本；需要时作义项的最后一段 |
-| D10 | 取消同义词链与 `[refer to ...]`，每词独立释义 | 每词写自己的释义，即使意思相近也各自表述 |
+| D5 | 自测判定 PASS **不自动打勾** | 判定只说「对不对」，勾不勾由人点一下「勾选为已掌握」，可以再点撤销。误判不至于直接改动词表状态 |
+| D7 | 调用路径用 `/chat/completions` | `/responses` 是 OpenAI 专有的，DashScope 兼容模式没有；「未来可换模型但保证 openai-compatible」这条要求下，它是唯一公因子 |
+| D8 | 不依赖 structured outputs | 跨 provider 可移植性优先；改为提示词约束 JSON，加服务端容错解析（剥代码围栏、取首个平衡的 `{}`） |
+| D9 | 中文释义默认不生成，但解析与序列化支持 | 做成加词面板的可选开关，零额外架构成本；需要时作义项的最后一段 |
+| D10 | 取消同义词链与 `[refer to ...]`，每词独立释义 | 每个词写自己的释义，意思再近也各自表述 |
 | D11 | 勾选状态独立，工具不得成对同步 | 近义词、同根词之间不要求一致 |
-| D13 | 判定反馈提供中/英开关，默认中文 | 语言只影响 `reason` 与 `suggestion`；判定标准、释义与例句的英文要求不变 |
-| D14 | 编辑只改释义/中文/难度/例句/勾选，**不改词头** | 改词头牵动排序与章节归属、还可能撞出重复词头，风险大于收益；要换词就「加词 + 删除旧行」（D17）。词头只读（要换词就加词 + 删旧行）；词头里的旧式多余段会在下次编辑时被规范化 |
-| D15 | 整轮自测：每词最多三次机会，跑完统一结算 | 一轮上百条，逐词写盘会产生上百份备份且无法回看；改为作答进度实时写 `.state/exam.json`（可暂停、可断点续测），结束时给「将勾选 / 将取消」清单、确认后一次写盘。考试模式下 AI 只能返回固定错误码（自由文本一律丢弃），`suggestion` 强制为空、`storedDefinition` 不发给模型，确保过程中不透答案 |
-| D16 | 模型全平级：一切模型配置都在 `settings.json`，`.env` 只放密钥、`VOCAB_FILE`、`PORT`，工具绝不写 `.env` | 不再有 `.env` 默认接入点（`OPENAI_BASE_URL`/`OPENAI_API_KEY`/`VOCAB_MODEL(S)`/`VOCAB_EXTRA_JSON` 全部废除）。`extraModels` 里每个模型自带 `{name, baseUrl, keyName, extra}`，相互平级、无回退；密钥用 `VOCAB_KEY_名字=…` 存 `.env`，界面只选名字 |
+| D13 | 判定反馈提供中英开关，默认中文 | 语言只影响 `reason` 与 `suggestion`；判定标准、释义与例句的英文要求不变 |
+| D14 | 编辑只改释义、中文、难度、例句、勾选，**不改词头** | 动词头会牵动排序与章节归属，还可能撞出重复词头，风险大于收益。要换词就「加词 + 删除旧行」（D17）。词头只读，里面的旧式多余段会在下次编辑时被规范化 |
+| D15 | 整轮自测：每词最多三次机会，跑完统一结算 | 一轮上百条，逐词写盘会产生上百份备份且无法回看；改为作答进度实时写 `.state/exam.json`（可暂停、可断点续测），结束时给「将勾选 / 将取消」清单、确认后一次写盘。考试模式下 AI 只能返回固定错误码（自由文本一律丢弃），`suggestion` 强制为空，`storedDefinition` 不发给模型，过程中不透答案 |
+| D16 | 模型全平级：一切模型配置都在 `settings.json`，`.env` 只放密钥、`VOCAB_FILE`、`PORT`，工具绝不写 `.env` | 不再有 `.env` 默认接入点（`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`VOCAB_MODEL(S)`、`VOCAB_EXTRA_JSON` 全部废除）。`extraModels` 里每个模型自带 `{name, baseUrl, keyName, extra}`，相互平级、没有回退；密钥用 `VOCAB_KEY_名字=…` 存 `.env`，界面只选名字 |
 | D17 | 词表可整条删除一个词（主行 + 义项行），两步内联确认 | 破坏性操作，所以「点一次变成『确认删除 xxx』、5 秒内再点一次才落盘」，不用原生弹窗（避免自动化与焦点问题）；写盘前照例备份。与整测不互斥：队列冻结在开始时，中途删掉的词在结算时按 `wordNotFound` 跳过 |
-| D18 | CEFR 档位改为查表，模型不再猜难度 | 免费免密钥的官方 CEFR API 不存在（Cambridge EVP 只有网页、Oxford 官方 API 要申请且收费），所以落地为**内置查询表** `data/cefr.json`，分层优先并与许可一起记录（见 §4.5）。命中不了的记「CEFR 表外」：档位留空、界面标注、由人手动选，**绝不回退成 AI 猜测** |
-| D19 | 一词多义/多词性用**平级义项行**，每条义项自带 CEFR 档位 | 主行只留词头，每条义项一行同缩进。硬约束：每条义项都必须带释义、档位、例句；整条没有释义 → 解析报错，写入层对此有兜底与专门的单测。（2026-09-29 起旧式「释义在主行 + 子行只放例句」不再兼容，见 §3.2） |
-| D20 | 删掉回填与「重查 CEFR」这类临时需求，词表改为「多选 + 逐词重构」 | 缺例句/缺难度/待规范化筛选、批量回填面板（含 `jobs.js`、`/api/backfill/*`、每批词数设置）与「重查 CEFR」差异清单都是当初为存量服务的一次性工具，现已下线；`data/cefr.json` 查表本身保留。词表每行加复选框，可「全选当前筛选」；选中若干词后「重构选中的词」，把**该词现有内容（含原始 markdown 行）+ 查表得到的该词与派生词的参考档位**一起交给 AI，返回补齐后的义项与一句改动说明，逐个可勾选、确认后一次写盘一份备份 |
-| D21 | 生成草稿与逐词重构合并成同一个核心，档位由 AI 定、参考词表作为佐证 | `ai.sensesEntry({word, current, referenceLevels, withChinese})` 是唯一入口：`current:null` 即草稿，带上现有内容即重构；提示词与契约只有一套（`entry`）。返回 `senses[{level, levelBasis, definition, chinese, example}]`，`levelBasis` 必须如实标注 `reference`（档位取自参考词表）或 `judged`（词表没覆盖、AI 自判），界面逐行显示「查表定档：CEFR-J B1 · Oxford B2」或「AI 判断（参考：…）」，一眼能看出哪些档位是权威、哪些是模型判断 |
-| D22 | **掌握程度按义项，不按词** | 掌握状态**只写在义项行的勾选框上**，主行不带框；词级状态是推导值（所有义项都勾 = 已掌握）。统计出**词数与义项数两套**数字；自测与整测的考核单元是「词 + 义项」，出题显示该义项自己的例句与「义项 n/m」，判定时把该义项的例句一并交给模型（否则非核心义项的正确回答会被误判），结算按义项写框。2026-09-29 改版：原先「多义项才写框、单义项状态留在主行」的做法整表迁移成现在这样（一次性迁移脚本用完即删） |
+| D18 | CEFR 档位改为查表，模型不再猜难度 | 免费免密钥的官方 CEFR API 不存在（Cambridge EVP 只有网页，Oxford 官方 API 要申请且收费），所以落地为**内置查询表** `data/cefr.json`，分层优先并与许可一起记录（§4.5）。命中不了的记「CEFR 表外」：档位留空、界面标注、由人手动选，绝不回退成 AI 猜测 |
+| D19 | 一词多义或多词性用**平级义项行**，每条义项自带 CEFR 档位 | 主行只留词头，每条义项一行同缩进。硬约束是每条义项都必须带释义、档位、例句；整条没有释义就解析报错，写入层对此有兜底与专门的单测。旧式「释义在主行、子行只放例句」的写法从 2026-09-29 起不再兼容（§3.2） |
+| D20 | 删掉回填与「重查 CEFR」这类临时需求，词表改为「多选 + 逐词重构」 | 缺例句、缺难度、待规范化筛选，批量回填面板（含 `jobs.js`、`/api/backfill/*`、每批词数设置），以及「重查 CEFR」差异清单，都是当初为存量服务的一次性工具，现在下线；`data/cefr.json` 查表本身保留。词表每行加复选框，可「全选当前筛选」；选中若干词后「重构选中的词」，把该词现有内容（含原始 markdown 行）和查表得到的该词与派生词的参考档位一起交给 AI，返回补齐后的义项与一句改动说明，逐个可勾选、确认后一次写盘一份备份 |
+| D21 | 生成草稿与逐词重构合并成同一个核心，档位由 AI 定、参考词表作为佐证 | `ai.sensesEntry({word, current, referenceLevels, withChinese})` 是唯一入口：`current:null` 就是草稿，带上现有内容就是重构；提示词与契约只有一套（`entry`）。返回 `senses[{level, levelBasis, definition, chinese, example}]`，`levelBasis` 必须如实标注 `reference`（档位取自参考词表）或 `judged`（词表没覆盖、AI 自判）。界面逐行显示「查表定档：CEFR-J B1 · Oxford B2」或「AI 判断（参考：…）」，一眼能看出哪些档位是权威、哪些是模型判断 |
+| D22 | **掌握程度按义项，不按词** | 掌握状态只写在义项行的勾选框上，主行不带框；词级状态是推导值（所有义项都勾才算已掌握）。统计出词数与义项数两套数字；自测与整测的考核单元是「词 + 义项」，出题显示该义项自己的例句与「义项 n/m」，判定时把该义项的例句一并交给模型（否则非核心义项的正确回答会被误判），结算按义项写框。2026-09-29 改版把原先「多义项才写框、单义项状态留在主行」的做法整表迁移成现在这样，迁移脚本用完即删 |
 
 ### 3.1 为什么最小单位是义项
 
-一个词的不同义项难度可以差很多（`angle` 的「角」是 A2，「钓鱼」是 C1），背过一个词的核心义不代表会用它的冷门义。所以掌握状态、判定、出题都下移到义项，词级的 `[x]` 只是「全都会了」的汇总。
+一个词的不同义项难度可以差很远：`angle` 的「角」是 A2，「钓鱼」是 C1。背过一个词的核心义，不代表会用它的冷门义。所以掌握状态、判定、出题都下移到义项，词级那个 `[x]` 只是「全都会了」的汇总。
 
 ### 3.2 已废止 / 被取代
 
-- **D6 存量回填**（网页面板、每批 30 词串行）：被 D20 下线，相关代码与设置项已删。当年的存量 397 条已全部回填完（0 失败、勾选状态未变）。
-- **D12 规范化面板**：取消。22 行同义词链与 `[refer to ...]` 早在 2026-09-06 手工拆完，解析器也不再为这类写法保留任何特殊分支。
-- **旧式义项写法**（释义放主行、子行只放例句 `#级别 · 例句`、或义项行不带勾选框、空框写成 `[]`）：2026-09-29 起**不再兼容**，一律按语法错误拒绝读取。迁移是一次性的（整表 589 条改写、备份在手），代码里没有兼容分支。
+- **D6 存量回填**（网页面板、分批串行）：被 D20 下线，相关代码与设置项已删。当年的存量条目早已全部补完，勾选状态没被动过。
+- **D12 规范化面板**：取消。同义词链与 `[refer to ...]` 早在 2026-09-06 手工拆完，解析器也不再为这类写法保留特殊分支。
+- **旧式义项写法**（释义放主行、子行只放例句 `#级别 · 例句`、义项行不带勾选框、空框写成 `[]`）：2026-09-29 起不再兼容，一律按语法错误拒绝读取。迁移是一次性的（整表改写，备份在手），代码里没有兼容分支。
 - **批量回填 / 重查 CEFR / 每批词数设置**：见 D20，已从代码、接口与界面移除。
-- **词性标注**（在词头或释义里写 `(v.)`/`(n.)`、不同词性分开建条目）：2026-09-29 取消。同一词的不同词性改用多条义项表达；`cefr.js` 里「按尾部括号选词性条目」的查询侧提示也一并删掉（括号内容现在只当噪声剥掉，带旧标注的词头仍能查到档位），各权威表里按词性分列的档位仍在 `describe()` 里给 AI 当参考。真表里仅有的两条（`iron (v.)`、`toast (v.)`）已就地改掉。
+- **词性标注**（在词头或释义里写 `(v.)`、`(n.)`，或不同词性分开建条目）：2026-09-29 取消。同一词的不同词性改用多条义项表达；`cefr.js` 里「按尾部括号选词性条目」的查询侧提示也一并删掉（括号内容现在只当噪声剥掉，带旧标注的词头仍能查到档位），各权威表里按词性分列的档位仍在 `describe()` 里给 AI 当参考。
 
 ---
 
@@ -175,9 +167,9 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
    Vocabulary.md + .state/exam.json + settings.json + data/cefr.json → OpenAI 兼容 /chat/completions
 ```
 
-依赖单向：`server → {ai, exam, cefr, settings} → {vocab, store}`。`vocab.js` 不 require 任何模块、不读文件、不碰网络——这是它能被纯字符串单测覆盖的前提，改动它必须只靠单测验证。`config.js` 只解析环境与路径，不碰业务；`store.js` 只管「怎么安全地读写那一个文件」，不知道词表长什么样。
+依赖是单向的：`server → {ai, exam, cefr, settings} → {vocab, store}`。`vocab.js` 不 import 任何模块、不读文件、不碰网络，这是它能被纯字符串单测覆盖的前提，改动它必须只靠单测验证。`config.js` 只解析环境与路径，不碰业务；`store.js` 只管「怎么安全地读写那一个文件」，对词表长什么样一无所知。
 
-数据侧另有两个非运行期资产：`tools/build-cefr-data.mjs`（把 `data/sources/` 的原始清单编译成 `data/cefr.json`，随代码提交以便复现）与 `backups/`（历史快照）。
+数据侧另有两个非运行期资产：`tools/build-cefr-data.mjs` 把 `data/sources/` 的原始清单编译成 `data/cefr.json`（随代码提交，便于复现），以及 `backups/` 里的历史快照。
 
 ### 4.2 vocab.js（纯字符串层）
 
@@ -186,54 +178,54 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | `parse` | `(text) → {entries, chapters, errors, stats}` | 全量解析；`entries` 带 `lineStart/lineEnd/childLines/senses[]` 供行编辑定位；`stats` 含词级与义项级两套计数 |
 | `sortKey` | `(word) → string` | 见 §2.1 |
 | `serializeHead` / `serializeSense` | `(entry/sense) → string` | 主行（`- 词头`）/ 义项行（带勾选框的完整形式） |
-| `planInsertEntry` | `(text, entry) → Edit` | 新词插入（按排序键定位、必要时新建章节）；只接受带 `senses` 的条目，平坦字段（definition/difficulty/example）会先折成一条义项 |
-| `planSetChecked` | `(text, word, checked) → {edits, noop}` | **词级**勾选 = 把该词所有义项设成同一状态（内部就是调下面的批量版） |
-| `planSetSenseChecked` | `(text, word, index, checked) → {edits, noop}` | **义项级**勾选：只改那一条义项行 |
-| `planSetSensesChecked` | `(text, word, [{index, checked}]) → {edits, noop}` | 批量版（一次写多条义项，整测结算用）。没有义项行的条目返回 `noSenses` |
-| `planSetEntry` | `(text, word, patch) → {edits, noop}` | 行内编辑：`patch.senses` 重写整段义项；只给平坦字段时替换第一条、其余义项原样保留 |
+| `planInsertEntry` | `(text, entry) → Edit` | 新词插入（按排序键定位，必要时新建章节）；只接受带 `senses` 的条目，平坦字段（definition/difficulty/example）会先折成一条义项 |
+| `planSetChecked` | `(text, word, checked) → {edits, noop}` | **词级**勾选，等于把该词所有义项设成同一状态（内部转调下面的批量版） |
+| `planSetSenseChecked` | `(text, word, index, checked) → {edits, noop}` | **义项级**勾选，只改那一条义项行 |
+| `planSetSensesChecked` | `(text, word, [{index, checked}]) → {edits, noop}` | 批量版，一次写多条义项，整测结算用。没有义项行的条目返回 `noSenses` |
+| `planSetEntry` | `(text, word, patch) → {edits, noop}` | 行内编辑：`patch.senses` 重写整段义项；只给平坦字段时替换第一条，其余义项原样保留 |
 | `planSetSenses` | `(text, word, senses) → {edits, noop}` | 只重写该词的义项块，主行不动（`/api/commit-senses`） |
 | `planDeleteEntry` | `(text, word) → {edits, removed}` | 整条删除（主行 + 全部义项行） |
-| `applyEdits` | `(text, edits[]) → string` | 按行号倒序应用，避免位移失效；区间重叠、插入点落在替换区间内、越界一律抛错 |
+| `applyEdits` | `(text, edits[]) → string` | 按行号倒序应用，避免位移失效；区间重叠、插入点落在替换区间内、越界，一律抛错 |
 
-`Edit = {type: insertBefore | insertAfter | replace, lineStart, lineEnd, newText, word}`。任一 plan 函数遇目标缺失、重复词头、解析错误时返回 `{error}`，调用方必须拒绝写盘；义项字段不合规（缺释义/缺例句/档位非法/中文段不是中文）也返回 `{error}`，码见 §4.9。
+`Edit = {type: insertBefore | insertAfter | replace, lineStart, lineEnd, newText, word}`。任一 plan 函数遇到目标缺失、重复词头或解析错误，返回 `{error}`，调用方必须拒绝写盘；义项字段不合规（缺释义、缺例句、档位非法、中文段不是中文）同样返回 `{error}`，错误码见 §4.9。
 
-写盘的通用约定：**只有内容真的变了才产生 edit**；`noop` 为真时服务端不写盘、不备份（`backup: null` 回报给前端）。
+写盘有个通用约定：**只有内容真的变了才产生 edit**。`noop` 为真时服务端不写盘也不备份，前端会收到 `backup: null`。
 
 ### 4.3 store.js / config.js / settings.js
 
-- **store.js**：`readFile()` / `writeWithBackup(text)` / `enqueue(fn)`（串行队列）/ `listBackups()` / `selfCheck()` / `createStateFile({file})`（原子 JSON 写，用于考试进度与设置）。启动时校验词表存在可写并做一次 `parse` 自检，失败则拒绝启动并打印错误行号。
-- **config.js**：`loadConfig()` → `{dir, envFile, keys, keyNames, vocabFile, cefrFile, backupDir, settingsFile, stateDir, port}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖路径的环境变量见 §5。
-- **settings.js**：`DEFAULTS = {model:null, extraModels:[], lang:'zh', theme:'auto', prompts:{entry:null, judge:null}}`；`patch()` 白名单校验（非法值 `400 badSettings`，文件损坏时报告 `settingsError` 且绝不静默覆盖）。`normalizeModel` 要求 `name` + http(s) `baseUrl` + `keyName`（必须对应 `.env` 里已有的密钥名），可选 `extra`（JSON 对象、≤2000 字符）。提示词键只有 `entry`/`judge`，空串等于恢复默认，旧键 `draft`/`refactor`/`backfill` 自动迁移到 `entry`。`modelEndpoints({settings, keys})` 把模型映射成调用目标。
+- **store.js**：`readFile()`、`writeWithBackup(text)`、`enqueue(fn)`（串行队列）、`listBackups()`、`selfCheck()`、`createStateFile({file})`（原子 JSON 写，用于考试进度与设置）。启动时校验词表存在可写，并做一次 `parse` 自检；失败就拒绝启动并打印错误行号。
+- **config.js**：`loadConfig()` → `{dir, envFile, keys, keyNames, vocabFile, cefrFile, backupDir, settingsFile, stateDir, port}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖的路径类环境变量见 §5。
+- **settings.js**：`DEFAULTS = {model:null, extraModels:[], lang:'zh', theme:'auto', prompts:{entry:null, judge:null}}`。`patch()` 做白名单校验，非法值报 `400 badSettings`，文件损坏时报 `settingsError` 且不静默覆盖。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应 `.env` 里已有的密钥名），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。
 
 ### 4.4 exam.js（整轮自测）
 
-- 队列是**义项级**的：`queue: [{word, sense}]`，出题顺序洗牌；`records` 用 `word#sense` 做键（状态文件 `version: 2`，读到 v1 会自动把旧队列/记录升级）。
-- 每词（严格说是每条义项）最多 3 次机会；`SKIP` 等价于三次不过且不花模型调用；上游报错不消耗次数。
-- 出题只暴露词头、该义项例句与「义项 n/m」——**不暴露释义**。判完一条才 `reveal` 该义项的表内释义/中文/例句。
+- 队列是**义项级**的：`queue: [{word, sense}]`，出题顺序洗牌；`records` 用 `word#sense` 做键。状态文件只认 `version: 2`，读到别的一律当作没有进行中的轮次。
+- 每词（严格说，每条义项）最多 3 次机会。`SKIP` 等价于三次不过，且不花模型调用；上游报错不消耗次数。
+- 出题只暴露词头、该义项例句与「义项 n/m」，**不暴露释义**。判完一条才 `reveal` 该义项的表内释义、中文与例句。
 - 结算 `preview` 出「将勾选 / 将取消 / 跳过」清单（每项带 `word`、`sense`、`level`），按词聚合后一次 `planSetSensesChecked` 写盘、一份备份；中途被删的词按 `wordNotFound` 跳过，不卡写盘。
-- 可暂停（`paused`，之后作答/结算一律 409 直到继续）、可放弃（词表零改动）、可强制重开。
+- 可暂停（`paused`，之后作答与结算一律 409，直到继续）、可放弃（词表零改动）、可强制重开。
 
 ### 4.5 cefr.js（查表定档，D18）
 
 `createCefr({dataFile})` → `{lookup(word), sources(), describe(word)}`。
 
-- `lookup(word)` 顺序：① `parseQuery` 归一（小写、压空格、去标点；括号里的内容一律当噪声剥掉，所以带旧式 `(v.)` 的词头仍能查到）② CEFR-J → Octanove → Oxford → Oxford Phrase List 依次查，同一词有多个词性条目时取最低档并在 `label` 注明 ③ 单词查不到就做**词形归并**再回查前三张表（`accounting→account`、`strengths→strength`），标签「词形归并自 X」 ④ 仍查不到就做**词根推测**（surface → lemma → family）：剥构词后缀（-ful/-less/-able/-ible/-ive/-al/-ic/-ment/-ness/-ity/-ance/-ent/…，含 -iness→y 这类变形）与常见前缀（un-/in-/im-/re-/dis-/de-/over-/under-/out-/mis-/pre-/non-/co-/sub-/inter-/super-…），最多迭代两轮，前缀与后缀可以混着剥（`reopen→open`、`underappreciated→appreciate`、`coworker→work`、`heroic→hero`），标签「词根推测自 X」 ⑤ 仍查不到但在常用 2 万词内 → 按词频标定区间给档，标注「按常用度推算（第 N 位）」 ⑥ 都不中 → `level: null`，界面显示「CEFR 表外」。第 ③④ 层只认权威表、不碰词频，剥出来的词根也不在表里就老实表外（`feckless` 不会因为 -less 被算成 `feck`）。
-- `describe(word)` 是给 AI 的参考：该词在各表里的档位（含按词性分列的条目）、**派生词**命中的档位（每项带 `via: 'lemma' | 'root'`，界面据此写「词形归并」或「词根推测」）、常用度排名。草稿与重构都把它随请求一起发出去，界面据此显示档位依据。
-- 数据在 `data/cefr.json`（运行期只读，`version` 与 `sources` 头部；版本不认识时直接报错而不是猜着用），源清单在 `data/sources/`，重建命令 `node tools/build-cefr-data.mjs`。
-- 五张来源与许可：**CEFR-J Vocabulary Profile 1.5**（Tono Laboratory / TUFS，可免费用于研究与商用，**须注明出处**）· **Octanove Vocabulary Profile C1/C2 1.0**（CC BY-SA 4.0）· **The Oxford 3000/5000** 与 **The Oxford Phrase List**（Oxford University Press，仅个人自用、不对外分发）· **google-10000-english 20k 词频表**（只取排名）。
-- 分层区间标定：用已知词对的词频排名取每档**中位数**，相邻档中位数的中点作分界，写进 `data/cefr.json` 的 `freqBands`（单测校验边界严格递增且末段覆盖到 20000）。
+- `lookup(word)` 的顺序：① `parseQuery` 归一（小写、压空格、去标点；括号里的内容一律当噪声剥掉，所以带旧式 `(v.)` 的词头仍能查到）② 依次查 CEFR-J、Octanove、Oxford、Oxford Phrase List，同一个词有多个词性条目时取最低档并在 `label` 里注明 ③ 单词查不到就做**词形归并**再回查前三张表（`accounting→account`、`strengths→strength`），标签「词形归并自 X」④ 仍查不到就做**词根推测**（surface → lemma → family）：剥构词后缀（-ful/-less/-able/-ible/-ive/-al/-ic/-ment/-ness/-ity/-ance/-ent/… 含 -iness→y 这类变形）与常见前缀（un-/in-/im-/re-/dis-/de-/over-/under-/out-/mis-/pre-/non-/co-/sub-/inter-/super-…），最多迭代两轮，前后缀可以混着剥（`reopen→open`、`underappreciated→appreciate`、`coworker→work`、`heroic→hero`），标签「词根推测自 X」⑤ 仍查不到但在常用 2 万词内，就按词频标定区间给档，标注「按常用度推算（第 N 位）」⑥ 全都不中，`level: null`，界面显示「CEFR 表外」。第 ③④ 层只认权威表、不碰词频，剥出来的词根不在表里就老实标表外：`feckless` 不会因为 -less 被算成 `feck`。
+- `describe(word)` 是给 AI 的参考：该词在各表里的档位（含按词性分列的条目）、**派生词**命中的档位（每项带 `via: 'lemma' | 'root'`，界面据此写「词形归并」或「词根推测」）、常用度排名。草稿与重构都会把它随请求一起发出去，界面据此显示档位依据。
+- 数据在 `data/cefr.json`（运行期只读，头部带 `version` 与 `sources`；版本不认识时直接报错，不会猜着用）。源清单在 `data/sources/`，重建命令 `node tools/build-cefr-data.mjs`。
+- 五张来源与许可：**CEFR-J Vocabulary Profile 1.5**（Tono Laboratory / TUFS，可免费用于研究与商用，**须注明出处**）、**Octanove Vocabulary Profile C1/C2 1.0**（CC BY-SA 4.0）、**The Oxford 3000/5000** 与 **The Oxford Phrase List**（Oxford University Press，仅个人自用、不对外分发）、**google-10000-english 20k 词频表**（只取排名）。
+- 分层区间的标定办法：拿已知词对的词频排名取每档**中位数**，相邻档中位数的中点作分界，写进 `data/cefr.json` 的 `freqBands`。单测校验边界严格递增，且末段覆盖到 20000。
 
 ### 4.6 ai.js（网络层与契约）
 
-- `chat(messages, {model, maxTokens, temperature=0})` → 文本。统一走 `POST {所选模型的 baseUrl}/chat/completions`（模型必须出现在 `settings.json` 的 `extraModels` 里，否则报 `aiConfig` 并点名是哪个模型；`baseUrl` 末尾误带 `/chat/completions` 会被剥掉）；`Authorization: Bearer` 用该模型 `keyName` 对应的 `VOCAB_KEY_*`；body 附加参数只来自该模型自己的 `extra`。超时 90s，失败重试 2 次（退避 1s/3s），**仅**对网络错误与 5xx/429 重试，4xx 不重试。
-- `parseJsonTolerant`：剥 ```json 围栏、取首个平衡的 `{...}`、单元素数组拆包；解析不出来就报错，绝不猜。
+- `chat(messages, {model, maxTokens, temperature=0})` → 文本。统一走 `POST {所选模型的 baseUrl}/chat/completions`；模型必须出现在 `settings.json` 的 `extraModels` 里，否则报 `aiConfig` 并点名是哪个模型；`baseUrl` 末尾误带 `/chat/completions` 会被剥掉。`Authorization: Bearer` 用该模型 `keyName` 对应的 `VOCAB_KEY_*`，body 附加参数只来自该模型自己的 `extra`。超时 90s，失败重试 2 次（退避 1s/3s），**仅**对网络错误与 5xx/429 重试，4xx 不重试。
+- `parseJsonTolerant`：剥代码围栏、取首个平衡的 `{...}`、单元素数组拆包。解析不出来就报错，不猜。
 
 **① 补齐义项 `sensesEntry({word, current, referenceLevels, withChinese})`（草稿与重构共用）**
 
-- 输入：`word`；`current`（现有条目：`{checked, headDefinition, headChinese, senses[], rawLines[]}`，草稿时为 `null`）；`referenceLevels`（`cefr.describe(word)`）；`withChinese`（重构时若现有条目已有中文，服务端自动置真）。
-- 输出 `{word, senses[{level, levelBasis, definition, chinese, example}], note}`，最多三条义项、最常用在前。服务端校验：档位必须属于 CEFR 六档、释义与例句非空、释义里不能含 ` - `；`levelBasis` 只认 `reference`/`judged`，缺省按 `judged`。
-- 提示词规则写在 `ENTRY_RULES`：≤3 条义项、definition ≤8 词小写无句号无 ` - `、chinese 2–6 字（仅当要中文）、example ≤14 词含词头屈折形、不得改词头、不得把两个意思或两种词性并成一条、**不得写 `(v.)`/`(n.)` 这类词性标注**、不得把档位当释义输出、`note` 一句中文说明改了什么。
-- 落盘走 `planSetEntry(senses)` / `planInsertEntry(senses)`，与编辑表单同一条路径。
+- 输入：`word`；`current`（现有条目 `{checked, headDefinition, headChinese, senses[], rawLines[]}`，草稿时为 `null`）；`referenceLevels`（即 `cefr.describe(word)`）；`withChinese`（重构时若现有条目已有中文，服务端自动置真）。
+- 输出 `{word, senses[{level, levelBasis, definition, chinese, example}], note}`，最多三条义项，最常用在前。服务端校验：档位必须属于 CEFR 六档，释义与例句非空，释义里不能含 ` - `；`levelBasis` 只认 `reference` 与 `judged`，缺省按 `judged`。
+- 提示词规则写在 `ENTRY_RULES`：最多 3 条义项；definition 不超过 8 词、小写、无句号、无 ` - `；chinese 2–6 字（仅当要中文）；example 不超过 14 词且含词头屈折形；不得改词头；不得把两个意思或两种词性并成一条；**不得写 `(v.)`、`(n.)` 这类词性标注**；不得把档位当释义输出；`note` 用一句中文说明改了什么。
+- 落盘走 `planSetEntry(senses)` 或 `planInsertEntry(senses)`，与编辑表单同一条路径。
 
 **② 自测判定 `judgeEntry({word, userDefinition, userExample, storedDefinition, targetExample}, {lang, exam})`**
 
@@ -241,26 +233,26 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 {"pass":true,"reason":"释义抓住核心义；例句用法正确。","suggestion":"可以试试及物以外的用法：absorb information"}
 ```
 
-- 释义：命中该词的核心义即算对，允许措辞不同、允许更宽泛；义项跑偏、写成中文、只写词性标注 → fail。
-- 例句：只判「这句话能不能证明你知道词义」。**语法小错、别扭表达、冠词缺失或误用、时态与单复数不一致、搭配不自然、把词用作其他词性，都不作为判错理由**（2026-09-11 定的口径）。例句 fail 只有三种情况：句子里根本没用到该词、句子体现的意思是错的或无关的、词拼写到认不出来。
-- 例句可选：留空则只判释义，系统提示追加一句「本次没有例句，只判释义」。
-- `storedDefinition` 仅作「参考、可能不完美」，AI 主要依据自身词知识判定。
-- `targetExample` 是**本次问的是哪条义项**的依据（自测/整测都传该义项的例句）——多义项没有这个信息会把正确回答误判成跑偏。
-- `lang`：`zh`（默认）/`en`，只决定 `reason` 与 `suggestion` 的语言；非法值回落 `zh`。服务端自己从文件读 `storedDefinition`，不接受前端传入。
-- **考试模式**（`exam:true`）硬约束：`reason` 只能是固定代码 `ok | sense-off | word-not-used | wrong-pos | spelling | partial | unspecified`，服务端把任何自由文本丢弃并归为 `unspecified`，界面按代码出中英双语固定文案；`suggestion` 恒为空；`storedDefinition` 不发给模型。原因：实测模型会把中文释义写进点评，纯提示词管不住。
+- 释义：命中该词的核心义就算对，措辞不同、更宽泛都行。义项跑偏、写成中文、只写词性标注，判 fail。
+- 例句：只判「这句话能不能证明你知道词义」。**语法小错、别扭表达、冠词缺失或误用、时态与单复数不一致、搭配不自然、把词用作其他词性，都不作为判错理由**（2026-09-11 定的口径）。例句 fail 只有三种情况：句子里根本没用到该词；句子体现的意思是错的或无关的；词拼写到认不出来。
+- 例句可选，留空就只判释义，系统提示追加一句「本次没有例句，只判释义」。
+- `storedDefinition` 只作「参考、可能不完美」，AI 主要依据自身词知识判定。
+- `targetExample` 是**本次问的是哪条义项**的依据（自测与整测都传该义项的例句）。多义项缺了这个信息，正确回答会被误判成跑偏。
+- `lang` 取 `zh`（默认）或 `en`，只决定 `reason` 与 `suggestion` 的语言，非法值回落 `zh`。`storedDefinition` 由服务端自己从文件读，不接受前端传入。
+- **考试模式**（`exam:true`）有硬约束：`reason` 只能是固定代码 `ok | sense-off | word-not-used | wrong-pos | spelling | partial | unspecified`，服务端把任何自由文本丢弃并归为 `unspecified`，界面按代码出中英双语固定文案；`suggestion` 恒为空；`storedDefinition` 不发给模型。原因很实际：实测模型会把中文释义写进点评，光靠提示词管不住。
 
-**③ 生成例句 `exampleEntry(word, definition)`** → `{example}`，单句 ≤14 词、含词头屈折形。只在用户点「生成新例句」时调用；替换表内例句复用 `POST /api/commit-edit`。
+**③ 生成例句 `exampleEntry(word, definition)`** → `{example}`，单句不超过 14 词、含词头屈折形。只在用户点「生成新例句」时调用；替换表内例句复用 `POST /api/commit-edit`。
 
 **④ 连通性自测 `testTarget({baseUrl, apiKey, model, extra})`** → `{ok, model, baseUrl, latencyMs}`，设置页「测试连通」用。
 
 ### 4.7 本地 HTTP API
 
-统一响应：成功 `200 {…}`；失败 `{error:{code,message,details?}}` + 4xx/5xx。所有写接口内部都走 `store.enqueue`。
+统一响应：成功 `200 {…}`；失败 `{error:{code,message,details?}}` 加 4xx/5xx。所有写接口内部都走 `store.enqueue`。
 
 | 方法 路径 | 请求 | 响应 |
 |---|---|---|
 | `GET /api/entries` | — | `{entries[], stats{total,checked,unchecked,senses{total,checked,unchecked},missingExample,missingDifficulty}}`；`checked` 是词级的「义项全勾」，每个 `senses[]` 项自带 `checked` |
-| `GET /api/random` | `?difficulty=B2&onlyUnchecked=1&count=1` | `{targets[]}`，每项 `{word,sense,count,chapter,level,definition,chinese,example,checked}`（义项级；自测抽题用） |
+| `GET /api/random` | `?difficulty=B2&onlyUnchecked=1&count=1` | `{targets[]}`，每项 `{word,sense,count,chapter,level,definition,chinese,example,checked}`（义项级，自测抽题用） |
 | `POST /api/draft` | `{word, withChinese?, model?}` | `{word,senses[],note,referenceLevels}`；与重构共用 `sensesEntry`（D21） |
 | `POST /api/example` | `{word, definition?, model?}` | `{example}` |
 | `POST /api/commit-add` | `{word, senses:[{level,definition,chinese?,example?,checked?}], checked?}`；也接受平坦的 `{definition,difficulty,example,chinese?}`（折成一条义项） | `{entry,backup}`；词已存在 `409 wordExists`；缺释义/缺例句/档位非法 `400` |
@@ -271,32 +263,32 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | `POST /api/set-checked` | `{word, sense?, checked}` | `{ok,word,sense,checked,backup}`；`sense` 缺省 0；状态本就一致时不写盘（`backup:null`） |
 | `POST /api/refactor` | `{word, model?}` | `{word,current,senses[],checked,note,referenceLevels,writeable,error}`；只给建议不写盘；词不存在 `404`、无模型 `503` |
 | `POST /api/refactor/commit` | `{items:[{word,senses[],checked?}]}` | `{changed,failed[],backup}`；逐词走 `planSetEntry`，一次写盘一份备份；写不进的词进 `failed` 并带原因 |
-| `GET /api/exam` | — | `{state,current,preview}`；无进行中的轮次时三者皆 `null` |
+| `GET /api/exam` | — | `{state,current,preview}`；没有进行中的轮次时三者皆 `null` |
 | `POST /api/exam/start` | `{chapter?,difficulty?,mastery?,q?,model?,lang?,force?}` | `{state,current}`；空筛选 `400 emptyScope`，已有进度需 `force` |
 | `POST /api/exam/answer` | `{word, sense, userDefinition, userExample?}` | `{word,sense,pass,reason,resolved,attemptsLeft,next}`；**不含 suggestion**，未判完不返回表内释义 |
 | `POST /api/exam/skip` | `{word, sense}` | `{word,sense,resolved:'fail',via:'skip',reason,next}`；不花模型调用 |
 | `POST /api/exam/reveal` | `{word, sense?}` | `{word,sense,level,result,attempts,definition,chinese,example}`；该条未判完 `409 examLocked` |
-| `POST /api/exam/pause` `…/resume` `…/abort` | `{}` | 暂停保留全部进度；暂停后作答/结算 `409 examPaused`；放弃不改词表 |
+| `POST /api/exam/pause` `…/resume` `…/abort` | `{}` | 暂停保留全部进度；暂停后作答与结算 `409 examPaused`；放弃不改词表 |
 | `POST /api/exam/lang` | `{lang}` | `{ok,lang}`；即时改本轮反馈语言并落盘 |
 | `POST /api/exam/preview` `…/commit` | — / `{}` | 清单 `{add[],remove[],unchanged,skipped[],total}` / 结算结果 `{changed,backup,state,…}`，`add/remove` 每项是 `{word,sense,level}` |
-| `GET/POST /api/settings` | 任意设置子集 | `{settings,settingsError,defaults,promptDefaults,contracts,models,keyNames,modelRoutes,envFile,settingsFile,hasKey}`；非法值 `400 badSettings` |
+| `GET/POST /api/settings` | 任意设置子集 | `{settings,settingsError,defaults,promptDefaults,contracts,models,keyNames,modelRoutes,envFile,settingsFile,vocabFile,hasKey}`；非法值 `400 badSettings` |
 | `GET /api/backups` | — | `{files[]}` |
 | `POST /api/open-config` | `{which:'env'\|'settings'}` | `{ok,file}`；用系统编辑器打开配置文件（不改内容） |
 | `POST /api/test-model` | `{model?, baseUrl?, keyName, extra?}` | `{ok,model,baseUrl,latencyMs}`；密钥名不存在 `400 badKeyName` |
 
 ### 4.8 UI
 
-单页五标签（加词 / 词表 / 自测 / 整测 / 设置），无框架、无路由、无构建。右上模型下拉对加词与整测生效（默认取设置里的模型）；任何写操作后 toast 提示备份文件名。
+单页五标签（加词 / 词表 / 自测 / 整测 / 设置），无框架、无路由、无构建。右上模型下拉对加词与整测生效，默认取设置里的模型；任何写操作之后都有 toast 提示备份文件名。
 
-- **加词**：单词输入框（支持逗号/换行批量）+「附中文释义」开关 → 逐个出草稿卡片。草稿卡 = **义项行列表**（与编辑表单同一板块）：每行 = 难度、释义、中文、例句 +「生成例句」「删除」，行下标注档位依据（「查表定档：CEFR-J B1 · Oxford B2」或「AI 判断（参考：…）」），可「+ 添加义项」。单条「写入」或「**写入全部**」，缺例句或第一条没释义的会跳过并汇总原因；成功后卡片变灰、显示落点章节，词已存在则给「定位到该条」。
-- **词表**：顶部「共 N 词 · M 条义项 ｜ 已掌握 x 词 / y 义项 · 未掌握 …」；工具栏是搜索 / 章节 / 难度 / 掌握状态（**义项全掌握 / 还有义项没掌握**）+「全选当前筛选」。每行：多选框、词级勾选标记（☑/☐，由义项推导）、词头、释义、档位 tag，行尾「编辑」「删除」；下方每条义项一行，**行首有自己的勾选框**，点一下即写盘并刷新（没有义项行的条目该框是禁用的）。勾选后顶栏显示「已选 N 个词」，筛选变化不影响已选集合。
-- **多选 + 逐词重构**：选中若干词 →「重构选中的词」，前端逐个调 `POST /api/refactor`（进度「重构中 i/N：word」），建议落进下方面板：每行 = 复选框 + 词头 + 旧档 → 新档 + 新义项逐条（级别/释义/中文/例句）+ 改动说明 + 参考档位（含派生词），**默认全勾**；「确认写入」一次写盘一份备份，写不进的词标出原因，完成后刷新列表并清空选择。
-- **单词编辑**：行内表单 = 义项列表（每行：自己的勾选框、难度、释义、例句、可选中文；可「+ 添加义项」、逐行删除、逐行「生成例句」）+ 一个「全部义项已掌握」批量勾（勾它等于把每行都勾上）。**每行都必须有释义和例句**，缺哪一行会就地提示。词头只读；保存 = 一次写盘 + 一份备份，主行只写词头、每条义项写成自己那一行。词头里多出来的旧式段会在保存时被规范掉。
-- **删除该词**：「删除」点一次变成红色的「确认删除 xxx」，5 秒内再点一次才落盘（超时自动解除，不弹窗）；一次移除主行与全部义项行，写盘前自动备份，toast 给备份文件名。整测跑到一半删掉的词不会卡住结算。
-- **自测**：词输入框（回车即开题）+「随机抽一个」（可「只从未掌握抽」、可按难度过滤、可切中/英反馈语言）。出题时**遮住释义、显示该义项的例句**；多义项词给「切换义项」下拉（列出每条义项及其档位与掌握状态），卡头显示「### 章节 · #档位 · 第 n/m 条义项」。你写英英释义（例句可选）→ 提交 → 判定卡：`PASS`/`FAIL` + 理由 + 建议，随后揭示该义项的表内释义对照。**判定从不写盘**：通过后出现「勾选为已掌握」（多义项时写明是哪一条），点一下才写，按钮随即变成「这条义项已勾选 · 撤销」可反悔；没通过不给勾选入口。
-- **整测**：按章节/难度/掌握状态/关键词筛一轮，逐**条义项**出题（词头 + 该义项例句 + 「第 n/3 次机会 · 本轮第 i/N 题 · 义项 a/m」，释义遮住），**只写英文释义、不要求例句**（提速）；SKIP 等价于三次不过、不消耗模型调用。未判完时保留并聚焦你刚写的释义，改一改就能重试；判完后反馈块与自测判定卡同一套样式（`verdict` 容器 + PASS/FAIL/SKIP 徽章 +「上一题 · 词 · 义项 n」+ 理由段 + 表内对照段），并立刻切下一题。工具栏可切反馈语言（写进本轮状态、刷新后保持）、「暂停」（保留全部进度并落盘）/「继续本轮」/「放弃本轮」/「放弃并重开」。全部判完（或中途）都可结算：先列「将勾选 / 将取消 / 跳过」清单（每项带该义项档位），勾选确认后一次写盘。进度实时落盘，刷新或重启服务都能接着考。
-- **设置**：默认模型（候选 = `settings.json` 的 `extraModels` 名单）、两套提示词覆盖与「恢复默认」（补齐义项 / 自测判定；清空即默认，固定契约只读展示在最后）、反馈语言、主题；模型区可「添加」「测试连通」「打开 .env」「打开 settings.json」，并明确提示工具不写 `.env`。
-- **深浅色**：`html[data-theme]` + CSS 变量；`auto` 跟随 `prefers-color-scheme`，头部按钮在浅色/深色/跟随系统间循环并写回设置；`<head>` 内联脚本先读 `localStorage` 定色，避免首帧闪白。
+- **加词**：单词输入框（支持逗号或换行批量）加「附中文释义」开关，逐个出草稿卡片。草稿卡就是**义项行列表**，与编辑表单同一板块：每行是难度、释义、中文、例句，加上「生成例句」「删除」，行下标注档位依据（「查表定档：CEFR-J B1 · Oxford B2」或「AI 判断（参考：…）」），可「+ 添加义项」。单条「写入」或「**写入全部**」；缺例句或第一条没释义的会跳过并汇总原因。成功后卡片变灰、显示落点章节，词已存在则给「定位到该条」。
+- **词表**：顶部显示「共 N 词 · M 条义项 ｜ 已掌握 x 词 / y 义项 · 未掌握 …」。工具栏是搜索、章节、难度、掌握状态（**义项全掌握 / 还有义项没掌握**），加「全选当前筛选」。每行有多选框、词级勾选标记（☑/☐，由义项推导）、词头、释义、档位 tag，行尾「编辑」「删除」；下方每条义项一行，**行首有自己的勾选框**，点一下即写盘并刷新（没有义项行的条目，那个框是禁用的）。勾选后顶栏显示「已选 N 个词」，筛选变化不影响已选集合。
+- **多选 + 逐词重构**：选中若干词后点「重构选中的词」，前端逐个调 `POST /api/refactor`（进度显示「重构中 i/N：word」），建议落进下方面板：每行是复选框、词头、旧档 → 新档、新义项逐条（级别/释义/中文/例句）、改动说明、参考档位（含派生词），**默认全勾**。「确认写入」一次写盘一份备份，写不进的词标出原因，完成后刷新列表并清空选择。
+- **单词编辑**：行内表单就是义项列表，每行有自己的勾选框、难度、释义、例句、可选中文，可「+ 添加义项」、逐行删除、逐行「生成例句」，另有一个「全部义项已掌握」批量勾（勾它等于把每行都勾上）。**每行都必须有释义和例句**，缺哪一行会就地提示。词头只读；保存等于一次写盘加一份备份，主行只写词头、每条义项写成自己那一行。词头里多出来的旧式段会在保存时被规范掉。
+- **删除该词**：点一次「删除」变成红色的「确认删除 xxx」，5 秒内再点一次才落盘（超时自动解除，不弹窗）。一次移除主行与全部义项行，写盘前自动备份，toast 给备份文件名。整测跑到一半删掉的词不会卡住结算。
+- **自测**：词输入框（回车即开题）加「随机抽一个」（可「只从未掌握抽」、可按难度过滤、可切中英反馈语言）。出题时**遮住释义、显示该义项的例句**；多义项词给「切换义项」下拉，列出每条义项及其档位与掌握状态，卡头显示「### 章节 · #档位 · 第 n/m 条义项」。你写英英释义（例句可选），提交后出判定卡：`PASS`/`FAIL` 加理由与建议，随后揭示该义项的表内释义对照。**判定从不写盘**：通过后出现「勾选为已掌握」（多义项时写明是哪一条），点一下才写，按钮随即变成「这条义项已勾选 · 撤销」，可以反悔；没通过就不给勾选入口。
+- **整测**：按章节、难度、掌握状态、关键词筛一轮，逐**条义项**出题（词头、该义项例句、「第 n/3 次机会 · 本轮第 i/N 题 · 义项 a/m」，释义遮住），**只写英文释义、不要求例句**（提速）；SKIP 等价于三次不过，不消耗模型调用。未判完时保留并聚焦你刚写的释义，改一改就能重试；判完后反馈块与自测判定卡同一套样式（`verdict` 容器、PASS/FAIL/SKIP 徽章、「上一题 · 词 · 义项 n」、理由段、表内对照段），并立刻切下一题。工具栏可切反馈语言（写进本轮状态、刷新后保持）、「暂停」（保留全部进度并落盘）／「继续本轮」／「放弃本轮」／「放弃并重开」。全部判完或中途都可结算：先列「将勾选 / 将取消 / 跳过」清单（每项带该义项档位），勾选确认后一次写盘。进度实时落盘，刷新或重启服务都能接着考。
+- **设置**：默认模型（候选来自 `settings.json` 的 `extraModels`）、两套提示词覆盖与「恢复默认」（补齐义项、自测判定；清空即默认，固定契约只读展示在最后）、反馈语言、主题。模型区可「添加」「测试连通」「打开 .env」「打开 settings.json」，并明确提示工具不写 `.env`。
+- **深浅色**：`html[data-theme]` 加 CSS 变量。`auto` 跟随 `prefers-color-scheme`，头部按钮在浅色、深色、跟随系统之间循环并写回设置；`<head>` 内联脚本先读 `localStorage` 定色，避免首帧闪白。
 
 ### 4.9 错误处理矩阵
 
@@ -307,11 +299,11 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | AI 回显 word 与请求不符 | 该条丢弃，不做模糊匹配 |
 | 词头重复（两章同词） | 拒绝写入，`409 duplicateWord`，要求人工确认 |
 | 目标行区间解析失败 | 拒绝写盘，返回错误行号 |
-| API 429/5xx/网络 | 退避重试 2 次。仍失败：整测里该题不算作答、不消耗次数（可以再点一次）；加词/重构里该词进失败清单，不中断其余词 |
+| API 429/5xx/网络 | 退避重试 2 次。仍失败：整测里该题不算作答、不消耗次数（可以再点一次）；加词与重构里该词进失败清单，不中断其余词 |
 | 写盘抛错 | 保留原文件不动，报错 |
-| Obsidian 同时改了文件 | 每次写前重读磁盘并重新定位锚点，不会覆盖无关行；目标词行被删则 `404` 并跳过 |
+| Obsidian 同时改了文件 | 每次写前重读磁盘并重新定位锚点，不覆盖无关行；目标词行被删则 `404` 并跳过 |
 | 义项序号越界 | `400 badSense`（`sense` 不是非负整数，或超出该词的义项数） |
-| 条目没有任何义项行 | 勾选/编辑被拒：`400 noSenses`（该条目没有义项行，先补一条） |
+| 条目没有任何义项行 | 勾选与编辑被拒：`400 noSenses`（先补一条义项） |
 | 义项缺释义 / 缺例句 / 档位非法 / 中文段不是中文 | `400 badDefinition` / `badExample` / `badDifficulty` / `badChinese`，整个请求不写盘 |
 | 文件写成旧格式（带框主行、义项行没框、`[]` 空框、`·` 子行） | 解析报 `malformedHead` / `malformedChild` → 拒绝读取（`/api/entries` 500 `parseErrors`），修好再开 |
 
@@ -319,42 +311,44 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 ## 5. 配置与密钥
 
-`.env`（本目录的 `.env`，被云同步排除、不进任何提交）**只放密钥、词表路径与端口**：
+`.env` 只放密钥、词表路径与端口，由你手工维护，工具绝不写它，改了要重启服务才生效：
 
 ```
 # 密钥，名字自取（settings.json 里每个模型用 keyName 指向其中一把）
 VOCAB_KEY_QWEN=<DashScope 的 key>
 VOCAB_KEY_ZHIPU=<智谱的 key>
-# 词表位置：指向 Obsidian 库里的真身（推荐，Obsidian 手改 + 工具写入都走它）
-VOCAB_FILE=C:/Users/Victor/Other/Notes/Vocabulary.md
+
+# 词表位置。推荐指向 Obsidian 库里的真身，Obsidian 手改和工具写入都走它
+VOCAB_FILE=<你的词表绝对路径，例如 D:/Notes/Vocabulary.md>
+
 PORT=5317
 ```
 
-- **工具绝不写 `.env`**；`.env` 由你手工维护，改了要重启服务才生效。**不要把 key 打进 shell 命令行**——权限层会拦，而且没必要：服务端自己读。
-- `VOCAB_FILE` 也可以留空（或指向本目录），此时默认用本目录的 `Vocabulary.md`——也就是那个硬链；换个机器、把整个文件夹拷过去就能独立跑（见 §8 的「复制到别处」）。
-- **模型全平级（D16）**：`settings.json` 的 `extraModels` 里每条是 `{name, baseUrl, keyName, extra}`——`baseUrl` 必填（该模型自己的 http(s) 接入点，末尾误带 `/chat/completions` 会被剥掉），`keyName` 必填且必须对应 `.env` 里某把 `VOCAB_KEY_名字`，`extra` 是可选的每模型附加参数 JSON 对象（不同厂商互斥参数的解法：qwen3.8-flash 带 `{"enable_thinking":false}`，智谱填 `{}` 即不带任何附加参数）。没有 `.env` 默认接入点，也没有模型间回退：按条目取接入点与钥匙，配错就报错并点名。
-- **密钥值只留在服务端**：`settings.json` 与所有 `/api/*` 响应里都只出现密钥名字，绝不出现值；前端代码里也没有。加新模型 = `.env` 加一把钥匙（如还没有）+ 设置页添加一条带接入点的模型。
-- 其余可覆盖路径（一般不用，测试沙盒用）：`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR`、`VOCAB_CEFR_FILE`。
-- 已知坑：DashScope 兼容模式下 qwen3 系列在非流式请求里带 `enable_thinking:true` 会报错，所以给这类模型配 `"extra": {"enable_thinking": false}`；OpenAI 官方端点会拒绝未知参数，对应模型的 `extra` 不要带它。
-- 提醒：key 曾在对话里明文出现过，若是长期有效的账号级 key，建议在控制台轮换。
+- **不要把 key 打进 shell 命令行。** 权限层会拦，而且没必要，服务端自己读。
+- `VOCAB_FILE` 留空或指向本目录时，默认用本目录的 `Vocabulary.md`，也就是那个软链。换机器、把整个文件夹拷过去就能独立跑（见 §8 的「复制到别处」）。
+- **模型全平级（D16）**：`settings.json` 的 `extraModels` 里每条是 `{name, baseUrl, keyName, extra}`。`baseUrl` 必填，是该模型自己的 http(s) 接入点，末尾误带 `/chat/completions` 会被剥掉；`keyName` 必填，必须对应 `.env` 里某把 `VOCAB_KEY_名字`；`extra` 是可选的每模型附加参数 JSON 对象。不同厂商的互斥参数就靠它解决：qwen3.8-flash 带 `{"enable_thinking":false}`，智谱填 `{}` 即不带附加参数。按条目取接入点与钥匙，配错就报错并点名。
+- **密钥值只留在服务端**：`settings.json` 与所有 `/api/*` 响应里出现的都只是密钥名字，值不会露面，前端代码里也没有。加新模型等于 `.env` 加一把钥匙（如果还没有），再去设置页添一条带接入点的模型。
+- 其余可覆盖路径（一般用不上，测试沙盒用）：`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR`、`VOCAB_CEFR_FILE`。
+- 已知坑：DashScope 兼容模式下 qwen3 系列在非流式请求里带 `enable_thinking:true` 会报错，所以给这类模型配 `"extra": {"enable_thinking": false}`；OpenAI 官方端点会拒绝未知参数，对应模型的 `extra` 里别放它。
+- 提醒：key 曾在对话里明文出现过，若是长期有效的账号级 key，建议去控制台轮换。
 
 ---
 
 ## 6. 测试
 
-`node --test`，零依赖，**192 条**。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返/字母序」那几个用例读本目录的 `Vocabulary.md`（走链接读到真身），**测试不写真实词表**。
+`node --test`，零依赖，192 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读本目录的 `Vocabulary.md`（走链接读到真身），**测试不写真实词表**。
 
 | 文件 | 数量 | 覆盖 |
 |---|---|---|
 | `test/vocab.test.js` | 35 | 无损往返（读真实词表逐字节校验主行与每条义项行）、`sortKey` 边界、插入位置与新建章节、**只接受新格式**（带框主行/无框义项行/`[]`/`·` 子行/孤儿子行都报错）、义项级勾选（单条/批量/词级）、`planSetEntry`（含只改第一条不丢义项）、`planSetSenses`、`planDeleteEntry`、`applyEdits` 重叠与越界拒绝、CRLF 保持 |
 | `test/ai.test.js` | 31 | 容错解析（裸 JSON / 围栏 / 前后带话 / 数组包裹）、重试策略（429 两次后成功、400 不重试）、义项契约（废数据丢弃、最多三条、`levelBasis` 归一）、判定规则与语言、`targetExample` 传参、考试模式只回代码、例句生成与校验 |
 | `test/server.test.js` | 54 | 全部路由的成功/校验/错误映射、密钥不外泄、`senses[].checked` 与词级 `checked`、判定义项、勾选义项写盘、整测一条完整轮次、重构与批量写盘、路径穿越与请求体上限 |
-| `test/exam.test.js` | 26 | 队列冻结与筛选、**每个义项独立出题**、三次机会、上游失败不消耗次数、乱序拒绝、reveal 锁、preview/commit（含中途删词跳过）、断点续测、v1 状态升级、暂停/继续/放弃、语言切换 |
-| `test/cefr.test.js` | 17 | 括号剥离、词形归并、**词根推测（两轮剥前缀/后缀、根不在表里就表外）**、常用度兜底、表外不猜、真实词表全量跑（命中率下限）、数据文件自检 |
-| `test/settings.test.js` | 13 | 白名单校验、提示词迁移（旧键→`entry`）、模型归一化、默认值 |
-| `test/store.test.js` | 16 | 备份轮转只留 20 份、写入抛错原文件不变、原子写、selfCheck 报错误行号、**硬链原处写入**、**软链写到真身而不是链接名**、**断链双向修复（谁新听谁）+ 重建链接类型** |
+| `test/exam.test.js` | 26 | 队列冻结与筛选、**每个义项独立出题**、三次机会、上游失败不消耗次数、乱序拒绝、reveal 锁、preview/commit（含中途删词跳过）、断点续测、旧版本状态文件被忽略、暂停/继续/放弃、语言切换 |
+| `test/cefr.test.js` | 17 | 括号剥离、词形归并、**词根推测（两轮剥前缀后缀、根不在表里就表外）**、常用度兜底、表外不猜、真实词表全量跑（命中率下限）、数据文件自检 |
+| `test/settings.test.js` | 13 | 白名单校验、未知提示词键被忽略、模型归一化、默认值 |
+| `test/store.test.js` | 16 | 备份轮转只留 20 份、写入抛错原文件不变、原子写、selfCheck 报错误行号、**硬链原处写入**、**软链写到真身而不是链接名**、**断链双向修复（谁新听谁）加重建链接类型** |
 
-**人工端到端**（改完代码**必须重启服务**，Node 不热加载）：真 key 冒烟 1 词草稿 + 1 次判定；沙盒副本上跑加词/整测/勾选/删除/重构各一条完整路径，`diff` 副本与原文件核对只有目标行变化，最后删副本。
+**人工端到端**（改完代码**必须重启服务**，Node 不热加载）：真 key 冒烟 1 词草稿加 1 次判定；沙盒副本上跑加词、整测、勾选、删除、重构各一条完整路径，`diff` 副本与原文件核对只有目标行变化，最后删副本。
 
 沙盒配方（已验证）：把 `VOCAB_FILE`、`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR` 全指到 `%TEMP%/vocab-*` 里的副本，`PORT=5318`，跑完 `diff` 再删。
 
@@ -371,28 +365,28 @@ PORT=5317
 | 2 | 只读闭环 `store/config/server` + 列表 UI | ✅ 浏览器实测 |
 | 3 | AI 加词 + 加词面板 | ✅ 副本实测（含新建章节、中文第三段） |
 | 4 | 自测判定 + 勾选写回 + 撤销 | ✅ 副本实测 |
-| 5 | 规范化面板 | ❌ 取消（22 行早已手工拆完） |
-| 6 | 存量回填 | ✅ 跑完 397/397 后按 D20 整套下线 |
+| 5 | 规范化面板 | ❌ 取消（存量早已手工拆完） |
+| 6 | 存量回填 | ✅ 旧条目全部补完后按 D20 整套下线 |
 | 7 | 文档 | ✅（本文合并了它） |
 
 ### 7.2 追加功能
 
-十二个：单词行内编辑 · 整轮自测（`exam.js`）· 深浅色 · 设置页 + 提示词覆盖 · 模型全平级（D16）· 删除该词（D17）· CEFR 查表（D18）· 多义项（D19）· 多选 + 逐词重构（D20）· 草稿/重构合流（D21）· 义项级掌握（D22）· 词根推测（任务二：`cefr.familyCandidates` 两轮剥前缀/后缀，标签「词根推测自 X」，真表覆盖率 414 → **431/589**）。
+十二个：单词行内编辑 · 整轮自测（`exam.js`）· 深浅色 · 设置页 + 提示词覆盖 · 模型全平级（D16）· 删除该词（D17）· CEFR 查表（D18）· 多义项（D19）· 多选 + 逐词重构（D20）· 草稿/重构合流（D21）· 义项级掌握（D22）· 词根推测（任务二：`cefr.familyCandidates` 两轮剥前缀后缀，标签「词根推测自 X」，比只做词形归并时多认出一批词）。
 
 ### 7.3 待办
 
 1. **任务三 难度 5 次取平均**：只针对 `levelBasis === 'judged'`（词表没覆盖、AI 自判）的义项，按钮触发跑 5 次，把六档折成数字取平均再四舍五入回档，记录一致度（如「AI 5 次均值 C1（4/5 一致）」），先出清单再写盘。**这是唯一还没动过的功能**（截至 2026-09-30）。
-2. **`public/app.js` 拆分（结构债）**：截至 2026-09-30 仍是 1719 行的单文件，五个面板 + 设置页挤在一个作用域里。按面板拆成 `public/js/{core,fill,cards,quiz,exam,settings}.js` 是纯搬迁、后端单测兜不住前端，所以只能靠浏览器逐面板验收，风险比后端改动大，一直没动。
-3. 勾选状态里相当一部分是早年手工勾的，用「整测」按实际表现重校一遍是最划算的；难度档同理，任务三做完后值得整表过一遍。
+2. **`public/app.js` 拆分（结构债）**：截至 2026-09-30 仍是 1719 行的单文件，五个面板加设置页挤在一个作用域里。按面板拆成 `public/js/{core,fill,cards,quiz,exam,settings}.js` 是纯搬迁，后端单测兜不住前端，只能靠浏览器逐面板验收，风险比后端改动大，一直没动。
+3. 勾选状态里相当一部分是早年手工勾的，用「整测」按实际表现重校一遍最划算；难度档同理，任务三做完后值得整表过一轮。
 
 ---
 
 ## 8. 目录结构、迁移与踩坑
 
-**目录**（2026-09-29 从 `Other\Notes\vocab-app` 迁到这里）：
+**目录**（2026-09-29 从 Obsidian 库内的 `vocab-app` 迁到这里，脱离了库）：
 
 ```
-C:\Users\Victor\Other\Programs\VocabApp\     ← 代码 + 文档 + 配置（不在 Obsidian 库里）
+VocabApp\             ← 代码 + 文档 + 配置，不在 Obsidian 库里
   README.md          唯一的权威规格（本文）
   server.js vocab.js store.js config.js settings.js ai.js cefr.js exam.js
   public/            index.html · app.js · style.css
@@ -400,24 +394,24 @@ C:\Users\Victor\Other\Programs\VocabApp\     ← 代码 + 文档 + 配置（不�
   data/              cefr.json + sources/（CEFR 原始清单）
   tools/             build-cefr-data.mjs
   backups/           写盘前的快照（只留最近 20 份）
-  .env settings.json start.bat package.json .gitignore .gitattributes
-  Vocabulary.md      ← 软链（symbolic link），指向下面那个真身
-C:\Users\Victor\Other\Notes\Vocabulary.md    ← 真身，Obsidian 库那边只留这一个文件
+  .env settings.json VocabApp.bat package.json .gitignore .gitattributes
+  Vocabulary.md      ← 软链，指向下面那份真身
+Notes\Vocabulary.md  ← 真身，Obsidian 库那边只留这一个文件
 ```
 
-- **为什么放个链接**：工具默认就在自己目录里找 `Vocabulary.md`，放个链进去，文件夹看起来是自包含的；数据真身留在 Obsidian 库里，你在 Obsidian 里照旧能看、能手改。`.env` 里的 `VOCAB_FILE` 仍指向库里的真身，两条路读写同一份文件。**两个位置都可以随便改**，工具读/写前会按 §2.7 的规则把两边对齐。
-- **链接是软链（symbolic link）**：指向真身的路径，所以「真身被改名式保存」也能自动跟上（硬链在这种情况下会断）。建它要管理员权限或开发者模式——本机是用一次 UAC 建的；普通权限建不了，只能用硬链。重建命令（会弹 UAC）：
+- **为什么放个链接**：工具默认在自己目录里找 `Vocabulary.md`，放个链进去，文件夹看起来是自包含的；数据真身留在 Obsidian 库里，你在 Obsidian 里照旧能看、能手改。`.env` 里的 `VOCAB_FILE` 仍指向库里那份真身，两条路读写同一份文件。**两个位置都可以随便改**，工具读写前会按 §2.7 的规则把两边对齐。
+- **链接是软链**：它指向真身的路径，所以真身被「改名式保存」也能自动跟上（硬链在这种情况下会断）。建它要管理员权限或开发者模式，本机是用一次 UAC 建的；普通权限建不了，只能退硬链。重建命令大致是这样，把两个变量换成你自己的位置，会弹一次 UAC：
   ```
-  $t='C:\Users\Victor\Other\Notes\Vocabulary.md'; $m='C:\Users\Victor\Other\Programs\VocabApp\Vocabulary.md'
+  $t='<真身路径>'; $m='VocabApp\Vocabulary.md'
   powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-Command',\"Remove-Item '$m' -Force; New-Item -ItemType SymbolicLink -Path '$m' -Target '$t'\""
   ```
-  真断了也不用管：工具下次读/写会按「谁新听谁的」把两边修好——重建软链没权限时会退成硬链（内容一样是同一份，只是少了一层「改名也跟得上」的保险）。
-- **复制到别处**：把文件夹拷过去，**别带那个软链**（拷过去会变成悬空链接）：删掉它，在本地放一份自己的 `Vocabulary.md`，或把 `.env` 里的 `VOCAB_FILE` 指到目标机器上的词表，填上自己的 `VOCAB_KEY_*` 就能独立跑。想连数据一起带走就拷一份真身文件放进目录、留空 `VOCAB_FILE`（默认就用本目录的 `Vocabulary.md`）。
-- **是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，**私有**——`data/cefr.json` 与 `data/sources/` 里是 Oxford 3000/5000 与 Phrase List，只有个人自用授权，别转公开（真要公开得先把这批数据摘出去、只留 `tools/build-cefr-data.mjs` 和源清单说明）。首提交 `4ceb470`，分支 `main`。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（软链指向库里的真身，换机器就废）；`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`start.bat` 单独 CRLF。推送认证走 Git Credential Manager（本机已装，`credential.helper=manager`），首次推会弹窗选账号。
-- **数据那边是 Obsidian 库**：用户会同时手改 `Notes\Vocabulary.md` → §2.7 的「外科手术式行编辑」不可省略。
-- **Bash 工具的默认 cwd 指向已失效的旧 OneDrive 路径**，调用 Bash 必须显式传工作目录（现在一般是 `C:\Users\Victor\Other\Programs\VocabApp`）。
-- 权限层（auto mode）会拦：shell 里明文带 key、写含密钥的文件、用 `..` 相对路径访问 vault 内文件。绕行：绝对路径 + `.env` 由服务端读取。
-- 正则里的 `\u` 转义会在写文件时塌成字面字符：判断 CJK 区间请用码点数值比较（见 `vocab.js` 的 `CJK_RANGES`）。
-- agent 起的后台 `node server.js` 会在回合之间被回收；要服务长期在线走 `start.bat`（独立窗口，关掉即停）。**移动/改名这个文件夹前先关掉那个窗口**，否则目录被占用、移不动。
-- `.bat` 必须 **CRLF + 纯 ASCII**：UTF-8 + LF 的批处理会被 cmd 按多字节切碎，中文 `echo` 会报「不是内部或外部命令」。
-- 环境：Windows + Node v24（`package.json` 为 `type=module`），零依赖；`node --test` 跑全量，`npm start` 前台起服务，`node tools/build-cefr-data.mjs` 重建 CEFR 查询表。
+  真断了也不用管：工具下次读写会按「谁新听谁的」把两边修好。重建软链没权限时会退成硬链，内容仍是同一份，只是少了「改名也跟得上」这层保险。
+- **复制到别处**：把文件夹拷过去，**别带那个软链**（拷过去会变成悬空链接）。删掉它，在本地放一份自己的 `Vocabulary.md`，或把 `.env` 里的 `VOCAB_FILE` 指到目标机器上的词表，填上自己的 `VOCAB_KEY_*` 就能独立跑。想连数据一起带走，就拷一份真身文件放进目录、留空 `VOCAB_FILE`（默认就用本目录的 `Vocabulary.md`）。
+- **这是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，**私有**。`data/cefr.json` 与 `data/sources/` 里是 Oxford 3000/5000 与 Phrase List，只有个人自用授权，别转公开；真要公开，先得把这批数据摘出去，只留 `tools/build-cefr-data.mjs` 和源清单说明。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（软链指向库里的真身，换机器就废）。`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`VocabApp.bat` 单独用 CRLF。推送认证走 Git Credential Manager，本机已装，第一次推会弹窗选账号。
+- **数据那边是 Obsidian 库**：你会同时手改 `Vocabulary.md`，所以 §2.7 的「外科手术式行编辑」不能省。
+- **Bash 工具的默认 cwd 指向已失效的旧 OneDrive 路径**，调用 Bash 必须显式传工作目录，通常就是本目录。
+- 权限层（auto mode）会拦：shell 里明文带 key、写含密钥的文件、用 `..` 相对路径访问 vault 内文件。绕行办法是绝对路径加 `.env` 由服务端读取。
+- 正则里的 `\u` 转义会在写文件时塌成字面字符，判断 CJK 区间请用码点数值比较（见 `vocab.js` 的 `CJK_RANGES`）。
+- agent 起的后台 `node server.js` 会在回合之间被回收；要服务长期在线就走 `VocabApp.bat`（独立窗口，关掉即停）。**移动或改名这个文件夹之前先关掉那个窗口**，否则目录被占用、移不动。
+- `.bat` 必须 **CRLF + 纯 ASCII**：UTF-8 加 LF 的批处理会被 cmd 按多字节切碎，中文 `echo` 会报「不是内部或外部命令」。
+- 环境：Windows 加 Node v24（`package.json` 为 `type=module`），零依赖。跑全量测试是 `node --test`，前台起服务是 `npm start`，重建 CEFR 查询表是 `node tools/build-cefr-data.mjs`。
