@@ -1,0 +1,5 @@
+# 这个项目从 Windows 上开发，但数据文件（CSV/TXT）参与 cefr.json 的构建，换行必须稳定
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF，否则 cmd 解析会出问题
+*.bat text eol=crlf
