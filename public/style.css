@@ -1125,8 +1125,12 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* 窄屏下顶部整块要吸住：不吸的话往下滚一点导航就没了，切面板得一路滚回顶。
+     同时把概览卡压成一行——它原来带两张进度条，自己就有 111px，是顶栏“特别大”的主因。 */
   .side {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 6;
     height: auto;
     flex-direction: row;
     align-items: center;
@@ -1150,7 +1154,19 @@ button:disabled {
 
   .overview {
     margin: 0 0 0 auto;
-    min-width: 168px;
+    min-width: 0;
+    padding: 5px 10px;
+  }
+
+  .overview .ov-row,
+  .overview .ov-bar {
+    display: none;
+  }
+
+  /* 导航已经吸顶，标题与工具跟着一起吸会挤掉两行内容；窄屏下让它随页面滚走，
+     面板名与当前导航项重复，模型与主题是设定一次就完的事。 */
+  .topbar {
+    position: static;
   }
 
   /* 窄屏下义项那三个输入框挤一行，每个只剩一百多像素，释义和例句都被截断。
