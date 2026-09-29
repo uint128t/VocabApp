@@ -114,7 +114,7 @@ function editForm(entry, li) {
   save.className = 'btn primary';
   save.textContent = '保存';
 
-  cancel.addEventListener('click', () => li.replaceChildren(entryNode(entry)));
+  cancel.addEventListener('click', () => li.replaceWith(entryNode(entry)));
   save.addEventListener('click', async () => {
     const rows = readSenses(list);
     if (!rows.length) {
@@ -328,7 +328,9 @@ function wordCheckCard(e, li) {
   let dirty = false;
 
   const close = () => {
-    li.replaceChildren(entryNode(e));
+    // entryNode 交回的就是一个新的 li，要拿它换掉手上这个；用 replaceChildren 会套成
+    // li 里再套一个 li，内层又加一份 padding，缩回后整条行高就鼓了。
+    li.replaceWith(entryNode(e));
     if (dirty) return loadEntries();
     return undefined;
   };

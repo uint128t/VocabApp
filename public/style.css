@@ -854,6 +854,13 @@ button:disabled {
 .entry-foot {
   display: flex;
   justify-content: flex-end;
+  /* 贴着上面那条义项行，别在每一条上多占一整行的高度 */
+  margin-top: -4px;
+}
+
+.entry-foot .edit-btn {
+  padding: 0 8px;
+  line-height: 1.35;
 }
 
 .check-card {
