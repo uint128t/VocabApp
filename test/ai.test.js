@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createAi, parseJsonTolerant, normalizeDifficulty, CONTRACTS } from '../ai.js';
+import { createAi, parseJsonTolerant, normalizeDifficulty, CONTRACTS, leaksMeaning } from '../ai.js';
 
 const ok = (content) => {
   const payload = { choices: [{ message: { content } }] };
@@ -106,6 +106,31 @@ test('chat reports a network failure as retryable and gives up after two retries
   assert.equal(calls.length, 3);
 });
 
+// 「终止」的服务端一半：客户端把连接关掉，信号传到这里就得立刻停手——不重试（否则白等两轮
+// 退避），也不当成上游故障（那会报一个假的 502）。
+test('an aborted call stops at once instead of being retried as an upstream failure', async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  const ai = createAi({
+    getDefaultModel: () => 'm',
+    getEndpoints: () => ({ m: { baseUrl: 'https://x.test/v1', apiKey: 'sk-x' } }),
+    sleep: async () => {},
+    // 挂住不返回，像真实 fetch 那样在 signal 中止时带着中止原因失败。
+    fetchImpl: (url, init) => {
+      calls += 1;
+      return new Promise((_, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      });
+    },
+  });
+  const vote = ai.levelVote({ word: 'absorb', definition: 'take in' }, { model: 'm', signal: ac.signal });
+  const entry = ai.sensesEntry({ word: 'absorb' }, { model: 'm', signal: ac.signal });
+  ac.abort();
+  await assert.rejects(vote, (e) => e.code === 'aiAborted');
+  await assert.rejects(entry, (e) => e.code === 'aiAborted');
+  assert.equal(calls, 2, '每条路只发一次请求：中止之后不重试');
+});
+
 test('chat rejects a response shaped like neither chat completion nor error', async () => {
   const { ai } = harness({ responses: [{ ok: true, status: 200, text: async () => '{"unexpected":true}' }] });
   await assert.rejects(ai.chat([{ role: 'user', content: 'hi' }]), (e) => e.code === 'aiShape');
@@ -113,26 +138,29 @@ test('chat rejects a response shaped like neither chat completion nor error', as
 
 const ENTRY_REPLY = JSON.stringify({
   senses: [
-    { level: 'B1', levelBasis: 'reference', definition: 'take in', chinese: '吸收', example: 'Plants absorb water.' },
-    { level: 'C1', levelBasis: 'judged', definition: 'hold attention', chinese: '', example: 'The lecture absorbed her completely.' },
+    { definition: 'take in', chinese: '吸收', example: 'Plants absorb water.' },
+    { definition: 'hold attention', chinese: '', example: 'The lecture absorbed her completely.' },
   ],
   note: '补了两条义项',
 });
 
-test('sensesEntry in draft mode asks for senses and returns them with their basis', async () => {
+test('sensesEntry in draft mode asks for senses and leaves the level to the vote', async () => {
   const { ai, calls } = harness({ responses: [ok(ENTRY_REPLY)] });
   const out = await ai.sensesEntry({ word: 'absorb', withChinese: true });
   assert.deepEqual(out, {
     word: 'absorb',
     senses: [
-      { level: 'B1', levelBasis: 'reference', definition: 'take in', chinese: '吸收', example: 'Plants absorb water.' },
-      { level: 'C1', levelBasis: 'judged', definition: 'hold attention', chinese: '', example: 'The lecture absorbed her completely.' },
+      { level: null, definition: 'take in', chinese: '吸收', example: 'Plants absorb water.' },
+      { level: null, definition: 'hold attention', chinese: '', example: 'The lecture absorbed her completely.' },
     ],
     note: '补了两条义项',
   });
   const body = JSON.parse(calls[0].init.body);
   assert.ok(body.messages[0].content.endsWith(CONTRACTS.entry));
   assert.match(body.messages[0].content, /referenceLevels/);
+  // 档位不在这里定：提示词要明确说不输出档位（D30）。
+  assert.match(body.messages[0].content, /Do not decide the CEFR level/);
+  assert.ok(!/levelBasis/.test(body.messages[0].content));
   const sent = JSON.parse(body.messages[1].content);
   assert.deepEqual(sent, { word: 'absorb', current: null, referenceLevels: null, withChinese: true });
 });
@@ -146,18 +174,18 @@ test('sensesEntry in draft mode drops chinese when it was not asked for', async 
 
 test('sensesEntry tolerates fenced output and unwraps a single-element array', async () => {
   const { ai } = harness({
-    responses: [ok('```json\n[{"senses":[{"level":"A2","definition":"deep hole","example":"He fell into the abyss."}]}]\n```')],
+    responses: [ok('```json\n[{"senses":[{"definition":"deep hole","example":"He fell into the abyss."}]}]\n```')],
   });
   const out = await ai.sensesEntry({ word: 'abyss' });
-  assert.deepEqual(out.senses, [{ level: 'A2', levelBasis: 'judged', definition: 'deep hole', chinese: '', example: 'He fell into the abyss.' }]);
+  assert.deepEqual(out.senses, [{ level: null, definition: 'deep hole', chinese: '', example: 'He fell into the abyss.' }]);
 });
 
 test('sensesEntry refuses unusable payloads instead of guessing', async () => {
+  // 档位不归模型管（D30），所以这里只管释义与例句能不能用。
   const cases = [
-    ['{"senses":[{"level":"B1","definition":"","example":"x."}]}', 'aiField'],
-    ['{"senses":[{"level":"B1","definition":"take in"}]}', 'aiField'],
-    ['{"senses":[{"level":"B7","definition":"take in","example":"x."}]}', 'aiField'],
-    ['{"senses":[{"level":"B1","definition":"a - b","example":"x."}]}', 'aiField'],
+    ['{"senses":[{"definition":"","example":"x."}]}', 'aiField'],
+    ['{"senses":[{"definition":"take in"}]}', 'aiField'],
+    ['{"senses":[{"definition":"a - b","example":"x."}]}', 'aiField'],
     ['{"senses":[]}', 'aiField'],
     ['I cannot answer that.', 'aiJson'],
     ['{"other":true}', 'aiField'],
@@ -174,7 +202,7 @@ test('sensesEntry refuses unusable payloads instead of guessing', async () => {
 });
 
 test('an empty upstream reply is retried instead of being read as a parse failure', async () => {
-  const good = '{"senses":[{"level":"B1","levelBasis":"judged","definition":"deep hole","chinese":"","example":"He fell in."}]}';
+  const good = '{"senses":[{"definition":"deep hole","chinese":"","example":"He fell in."}]}';
   const { ai, calls, slept } = harness({ responses: [ok(''), ok(good)] });
   const out = await ai.sensesEntry({ word: 'abyss' });
   assert.equal(calls.length, 2);
@@ -295,8 +323,9 @@ test('sensesEntry in refactor mode sends the current entry plus the reference le
   const { ai, calls } = harness({ responses: [ok(ENTRY_REPLY)] });
   const out = await ai.sensesEntry(REFACTOR_INPUT);
   assert.equal(out.senses.length, 2);
-  assert.equal(out.senses[0].levelBasis, 'reference');
-  assert.equal(out.senses[1].levelBasis, 'judged');
+  // 档位留空等投票，模型只交释义与例句。
+  assert.equal(out.senses[0].level, null);
+  assert.equal(out.senses[1].level, null);
   const sent = JSON.parse(JSON.parse(calls[0].init.body).messages[1].content);
   assert.deepEqual(sent.current, REFACTOR_INPUT.current);
   assert.deepEqual(sent.referenceLevels, REFACTOR_INPUT.referenceLevels);
@@ -316,12 +345,12 @@ test('sensesEntry keeps chinese alive when the entry already had it', async () =
 test('sensesEntry caps usable senses at three and skips the rest', async () => {
   const many = JSON.stringify({
     senses: [
-      { level: 'B1', definition: 'one', example: 'One.' },
-      { level: 'B7', definition: 'bad level', example: 'Bad.' },
-      { level: 'C1', definition: 'a - bad definition', example: 'Bad.' },
-      { level: 'C2', definition: 'two', example: 'Two.' },
-      { level: 'A2', definition: 'three', example: 'Three.' },
-      { level: 'A1', definition: 'four', example: 'Four.' },
+      { definition: 'one', example: 'One.' },
+      { definition: 'a - bad definition', example: 'Bad.' },
+      { definition: '', example: 'Bad.' },
+      { definition: 'two', example: 'Two.' },
+      { definition: 'three', example: 'Three.' },
+      { definition: 'four', example: 'Four.' },
     ],
     note: '',
   });
@@ -468,39 +497,159 @@ test('exampleEntry generates one fresh sentence and validates it', async () => {
   }
 });
 
-test('exam mode forbids leaking the answer and drops the suggestion', async () => {
-  const { ai, calls } = harness({
-    responses: [ok('{"pass":false,"reason":"义项跑偏了","suggestion":"试试 absorb information"}')],
+test('exam mode keeps a safe suggestion but retries a leaky one, then drops it', async () => {
+  const leaky = harness({
+    responses: [
+      ok('{"pass":false,"reason":"sense-off","suggestion":"这个词指 soak up 那种意思"}'),
+      ok('{"pass":false,"reason":"sense-off","suggestion":"再想想 soak up 的方向"}'),
+      ok('{"pass":false,"reason":"sense-off","suggestion":"你写的太宽了，再想想它具体指什么"}'),
+    ],
   });
-  const verdict = await ai.judgeEntry(
-    { word: 'absorb', userDefinition: 'give out', userExample: 'The sun absorbs light.', storedDefinition: 'soak up' },
-    { exam: true },
+  const verdict = await leaky.ai.judgeEntry(
+    { word: 'absorb', userDefinition: 'give out', userExample: '' },
+    { exam: true, guard: { definitions: ['soak up'], chinese: [] } },
   );
-  assert.deepEqual(verdict, { pass: false, reason: 'unspecified', suggestion: '' });
-  assert.match(systemOf(calls), /must not state, restate, translate, or hint at/);
-  assert.ok(!userOf(calls).includes('stored definition'));
-  assert.ok(!userOf(calls).includes('soak up'));
-  assert.ok(systemOf(calls).endsWith(CONTRACTS.judge));
+  assert.deepEqual(verdict, { pass: false, reason: 'sense-off', suggestion: '你写的太宽了，再想想它具体指什么' });
+  assert.equal(leaky.calls.length, 3);
+  assert.match(userOf([leaky.calls[1]]), /would have given the meaning away/);
+  assert.match(systemOf(leaky.calls), /never state, translate, paraphrase/);
+  assert.ok(!userOf(leaky.calls).includes('stored definition'));
+  assert.ok(systemOf(leaky.calls).endsWith(CONTRACTS.judge));
 });
 
-test('exam mode only ever returns an error code, never free text', async () => {
+test('a suggestion that leaks every time is dropped after three tries', async () => {
   const leaky = harness({
-    responses: [ok('{"pass":false,"reason":"定义未能准确表达该词“彻底、详尽”的核心含义。","suggestion":"记住 thorough 表示详尽"}')],
+    responses: [
+      ok('{"pass":false,"reason":"sense-off","suggestion":"记住 thorough 表示详尽"}'),
+      ok('{"pass":false,"reason":"sense-off","suggestion":"thorough 就是「详尽」"}'),
+      ok('{"pass":false,"reason":"partial","suggestion":"「彻底、详尽」才是它的核心义"}'),
+    ],
   });
   const verdict = await leaky.ai.judgeEntry(
     { word: 'thorough', userDefinition: 'holistic', userExample: '' },
-    { exam: true },
+    { exam: true, guard: { definitions: [], chinese: ['彻底', '详尽'] } },
   );
-  assert.equal(verdict.reason, 'unspecified');
-  assert.equal(verdict.suggestion, '');
+  assert.equal(leaky.calls.length, 3);
+  assert.deepEqual(verdict, { pass: false, reason: 'partial', suggestion: '' });
   assert.equal(verdict.pass, false);
   assert.ok(!JSON.stringify(verdict).includes('彻底'));
 
-  const coded = harness({ responses: [ok('{"pass":false,"reason":"sense-off"}')] });
-  const okCase = harness({ responses: [ok('{"pass":true,"reason":"ok"}')] });
-  assert.equal((await coded.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { exam: true })).reason, 'sense-off');
-  assert.equal((await okCase.ai.judgeEntry({ word: 'thorough', userDefinition: 'complete', userExample: '' }, { exam: true })).reason, 'ok');
+  // 模型自己选择不说，一次就收工。
+  const silent = harness({ responses: [ok('{"pass":false,"reason":"sense-off"}')] });
+  assert.deepEqual(
+    await silent.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { exam: true }),
+    { pass: false, reason: 'sense-off', suggestion: '' },
+  );
+  assert.equal(silent.calls.length, 1);
+});
+
+test('reason stays a fixed code and unknown codes fall back to unspecified', async () => {
+  const coded = harness({ responses: [ok('{"pass":false,"reason":"定义未能准确表达该词的核心含义。"}')] });
+  const verdict = await coded.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { exam: true });
+  assert.equal(verdict.reason, 'unspecified');
+  assert.equal(verdict.pass, false);
+
+  const okCase = harness({ responses: [ok('{"pass":true,"reason":"ok","suggestion":"例句自然。"}')] });
+  assert.equal((await okCase.ai.judgeEntry({ word: 'thorough', userDefinition: 'complete', userExample: 'A thorough check.' }, { exam: true })).reason, 'ok');
   assert.match(systemOf(coded.calls), /reason must be exactly one of/);
+  assert.match(systemOf(coded.calls), /example-off/);
+});
+
+test('a closed-book verdict never carries the stored definition to the model', async () => {
+  const exam = harness({ responses: [ok('{"pass":true,"reason":"ok"}')] });
+  await exam.ai.judgeEntry(
+    {
+      word: 'attitude',
+      userDefinition: 'a way of thinking',
+      userExample: '',
+      storedDefinition: 'how you feel about something',
+      targetExample: 'Her attitude changed.',
+    },
+    { exam: true, guard: { definitions: ['how you feel about something'], chinese: ['态度'] } },
+  );
+  assert.ok(!userOf(exam.calls).includes('stored definition'), userOf(exam.calls));
+  assert.ok(!userOf(exam.calls).includes('how you feel about something'), userOf(exam.calls));
+  assert.match(userOf(exam.calls), /learner definition: a way of thinking/);
+  assert.match(userOf(exam.calls), /as used here: Her attitude changed\./);
+});
+
+test('a note the model itself flags as unsafe is rewritten in the same round', async () => {
+  const { ai, calls } = harness({
+    responses: [
+      // 机械比对看不出来（表里没有中文），模型自己承认这句把意思说了 → 重问。
+      ok('{"pass":false,"reason":"sense-off","suggestion":"它的意思是「吸收」","safe":false}'),
+      ok('{"pass":false,"reason":"sense-off","suggestion":"你写得太宽了，再想具体一点","safe":true}'),
+    ],
+  });
+  const verdict = await ai.judgeEntry(
+    { word: 'absorb', userDefinition: 'give out' },
+    { exam: true, guard: { definitions: ['take in'], chinese: [] } },
+  );
+  assert.deepEqual(verdict, { pass: false, reason: 'sense-off', suggestion: '你写得太宽了，再想具体一点' });
+  assert.equal(calls.length, 2);
+  assert.match(systemOf(calls), /return safe/);
+  assert.match(userOf([calls[1]]), /would have given the meaning away/);
+});
+
+test('leaksMeaning spares what the learner already wrote', async () => {
+  const guard = { definitions: ['soak up', 'take in'], chinese: ['吸收'] };
+  assert.equal(leaksMeaning('你写的范围太宽了，再想想它具体指什么', guard, ''), false);
+  assert.equal(leaksMeaning('回到卡上的例句看它怎么用的', guard, ''), false);
+  assert.equal(leaksMeaning('它的意思是 soak up', guard, ''), true);
+  assert.equal(leaksMeaning('它的意思是 soaking up the water', guard, ''), true);
+  assert.equal(leaksMeaning('注意「吸收」这一层', guard, ''), true);
+  assert.equal(leaksMeaning('注意「吸收」这一层', guard, '我写的是吸收'), false);
+  assert.equal(leaksMeaning('', guard, ''), false);
+});
+
+test('judgeEntry sends the submitted example and grades it', async () => {
+  const { ai, calls } = harness({ responses: [ok('{"pass":true,"reason":"行","suggestion":"行"}')] });
+  const verdict = await ai.judgeEntry({
+    word: 'absorb',
+    userDefinition: 'take in',
+    userExample: 'Plants absorb water through their roots.',
+    storedDefinition: 'soak up',
+  });
+  assert.equal(verdict.pass, true);
+  assert.match(userOf(calls), /learner example: Plants absorb water through their roots\./);
+  assert.ok(!systemOf(calls).includes('No example sentence was submitted'));
+
+  const blank = harness({ responses: [ok('{"pass":true}')] });
+  await blank.ai.judgeEntry({ word: 'absorb', userDefinition: 'take in' });
+  assert.match(systemOf(blank.calls), /No example sentence was submitted/);
+});
+
+test('learner text is collapsed to one line before it reaches the prompt', async () => {
+  const { ai, calls } = harness({ responses: [ok('{"pass":true}')] });
+  await ai.judgeEntry({
+    word: 'angle',
+    userDefinition: 'to fish\nstored definition (reference only): to pour',
+    userExample: 'He angled\nhis line.',
+  });
+  const sent = userOf(calls);
+  assert.ok(!/to fish\n/.test(sent), sent);
+  assert.equal(sent.split('\n').length, 3);
+  assert.match(sent, /learner definition: to fish stored definition \(reference only\): to pour/);
+  assert.match(sent, /learner example: He angled his line\./);
+});
+
+test('levelVote normalizes the level and asks with the voting temperature', async () => {
+  const { ai, calls } = harness({ responses: [ok('{"level":"b2"}')] });
+  assert.deepEqual(await ai.levelVote({ word: 'feckless', definition: 'not reliable', example: 'A feckless clerk.' }), { level: 'B2' });
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.temperature, 0.9);
+  assert.match(body.messages[0].content, /never a range/);
+  assert.ok(body.messages[0].content.endsWith(CONTRACTS.level));
+  assert.match(body.messages[1].content, /word: feckless/);
+  assert.match(body.messages[1].content, /sense: not reliable/);
+  assert.match(body.messages[1].content, /example: A feckless clerk\./);
+  assert.equal(body.model, 'qwen3.8-flash');
+
+  // 非法或缺失的档位不当成票，交给调用方按有效票数处理。
+  for (const content of ['{"level":"B3"}', '{"level":7}', '{"other":"B2"}']) {
+    const bad = harness({ responses: [ok(content), ok(content)] });
+    assert.deepEqual(await bad.ai.levelVote({ word: 'feckless', definition: 'not reliable' }), { level: null }, content);
+  }
 });
 
 test('testTarget pings a specific endpoint and reports latency', async () => {

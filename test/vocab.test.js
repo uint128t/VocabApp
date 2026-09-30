@@ -10,7 +10,6 @@ import {
   serializeSense,
   planInsertEntry,
   planSetChecked,
-  planSetSenseChecked,
   planSetSensesChecked,
   planSetEntry,
   planSetSenses,
@@ -358,9 +357,10 @@ test('inserts reject duplicates and invalid fields', () => {
   }
 });
 
-test('sense level writes flip exactly one box character', () => {
+test('sense checkbox writes flip exactly one box character', () => {
   const t = fx(['### A', '', '- absorb', '  - [x] #B1 - take in - Plants absorb water.', '']);
-  const plan = planSetSenseChecked(t, 'absorb', 0, false);
+  const set = (text, on) => planSetSensesChecked(text, 'absorb', [{ index: 0, checked: on }]);
+  const plan = set(t, false);
   assert.equal(plan.edits.length, 1);
   assert.equal(plan.noop, false);
   assert.equal(plan.edits[0].lineStart, 3);
@@ -368,23 +368,39 @@ test('sense level writes flip exactly one box character', () => {
   assert.equal(plan.edits[0].newText.length, ls(t)[3].length);
   const out = applyEdits(t, plan.edits);
   assert.equal(out, fx(['### A', '', '- absorb', '  - [ ] #B1 - take in - Plants absorb water.', '']));
-  assert.equal(applyEdits(out, planSetSenseChecked(out, 'absorb', 0, true).edits), t);
-  assert.equal(planSetSenseChecked(out, 'absorb', 0, false).noop, true);
-  assert.deepEqual(planSetSenseChecked(out, 'absorb', 0, false).edits, []);
+  assert.equal(applyEdits(out, set(out, true).edits), t);
+  assert.equal(set(out, false).noop, true);
+  assert.deepEqual(set(out, false).edits, []);
   assert.equal(parse(out).stats.checked, 0);
   assert.equal(parse(out).stats.unchecked, 1);
 });
 
-test('sense level writes validate their input', () => {
+test('sense checkbox writes validate their input', () => {
   const t = fx(['### A', '', '- absorb', '  - [x] #B1 - take in - Plants absorb water.', '']);
-  assert.equal(planSetSenseChecked(t, 'abyss', 0, true).error.code, 'wordNotFound');
-  assert.equal(planSetSenseChecked(t, 'absorb', 1, true).error.code, 'badSense');
-  assert.equal(planSetSenseChecked(t, 'absorb', -1, true).error.code, 'badSense');
-  assert.equal(planSetSenseChecked(t, 'absorb', 0, 'yes').error.code, 'badChecked');
+  const set = (text, word, index, checked) => planSetSensesChecked(text, word, [{ index, checked }]);
+  assert.equal(set(t, 'abyss', 0, true).error.code, 'wordNotFound');
+  assert.equal(set(t, 'absorb', 1, true).error.code, 'badSense');
+  assert.equal(set(t, 'absorb', -1, true).error.code, 'badSense');
+  assert.equal(set(t, 'absorb', 0, 'yes').error.code, 'badChecked');
   const head = fx(['### A', '', '- lone', '']);
-  assert.equal(planSetSenseChecked(head, 'lone', 0, true).error.code, 'parseErrors');
+  assert.equal(set(head, 'lone', 0, true).error.code, 'parseErrors');
   const flat = fx(['### A', '', '- lone - on one\'s own', '']);
-  assert.equal(planSetSenseChecked(flat, 'lone', 0, true).error.code, 'noSenses');
+  assert.equal(set(flat, 'lone', 0, true).error.code, 'noSenses');
+});
+
+test('分隔符与方括号从写入路径上就被挡住', () => {
+  const t = fx(['### A', '', '- absorb', '  - [x] #B1 - take in - Plants absorb water.', '']);
+  const entry = (patch) => ({ word: 'bench', senses: [{ level: 'B1', definition: 'long seat', example: 'Sit here.' }], ...patch });
+  // 例句里带「 - 」会被序列化拆错：写进去是 `… - long seat - The score was 3 - 2.`，
+  // 再读回来例句只剩「2.」，释义变成「long seat - The score was 3」。
+  assert.equal(planInsertEntry(t, entry({ senses: [{ level: 'B1', definition: 'long seat', example: 'The score was 3 - 2.' }] })).error.code, 'badExample');
+  // 词头带方括号会写成「- [x] atom」，那是带框主行的形状，整张表从此读不出来。
+  for (const word of ['[x] atom', 'a]b', '[atom']) {
+    assert.equal(planInsertEntry(t, entry({ word })).error.code, 'badWord', word);
+  }
+  assert.equal(planInsertEntry(t, entry({})).error, undefined);
+  const broken = fx(['### A', '', '- bench', '  - [ ] #B1 - long seat - The score was 3 - 2.', '']);
+  assert.equal(parse(broken).entries[0].senses[0].example, '2.');
 });
 
 test('the word level toggle sets every sense at once', () => {

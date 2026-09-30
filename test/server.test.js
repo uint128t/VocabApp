@@ -32,6 +32,20 @@ const fakeCefr = ({ outside = [], levels = {} } = {}) => ({
     frequencyRank: null,
     outside: outside.includes(word),
   }),
+  // 逐步查表记录（界面上「定档依据」那块的原料）。假的就照 describe 编一份。
+  trace: (word) => ({
+    word,
+    tiers: [
+      { key: 'cefrj', source: 'CEFR-J', plain: outside.includes(word) ? null : levels[word] || 'B1', pos: [] },
+      { key: 'octanove', source: 'Octanove C1/C2', plain: null, pos: [] },
+      { key: 'oxford', source: 'Oxford 3000/5000', plain: null, pos: [] },
+      { key: 'phrase', source: 'Oxford Phrase List', plain: null, pos: [] },
+    ],
+    lemma: [],
+    root: [],
+    rank: null,
+    band: null,
+  }),
 });
 
 async function start(content = FIXTURE, { ai, cefr } = {}) {
@@ -189,13 +203,16 @@ const DRAFT = {
   ],
 };
 
-function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: '' }, delay = 0 } = {}) {
+function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: '' }, delay = 0, votes = [] } = {}) {
   const seen = [];
   const judged = [];
   const judgedOpts = [];
   const refactors = [];
   const examples = [];
   const tested = [];
+  const levelVotes = [];
+  // 五次并行调用按顺序取票，票用完了就用最后一票兜底。
+  const queue = [...votes];
   return {
     seen,
     judged,
@@ -203,6 +220,7 @@ function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: 
     refactors,
     examples,
     tested,
+    levelVotes,
     async sensesEntry(input, opts) {
       seen.push({ input, opts });
       if (input.current) refactors.push({ input, opts });
@@ -211,8 +229,7 @@ function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: 
         word: input.word,
         senses: [
           {
-            level: 'B2',
-            levelBasis: input.referenceLevels && input.referenceLevels.levels?.length ? 'reference' : 'judged',
+            level: null,
             definition: `sense of ${input.word}`,
             chinese: input.withChinese ? '释义' : '',
             example: `A fresh sentence for ${input.word}.`,
@@ -226,6 +243,16 @@ function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: 
       judgedOpts.push(opts || {});
       if (throwError) throw throwError;
       return verdict;
+    },
+    async levelVote(input, opts) {
+      levelVotes.push({ input, opts });
+      if (throwError) throw throwError;
+      if (queue.length) {
+        const next = queue.shift();
+        if (next instanceof Error) throw next;
+        return { level: next };
+      }
+      return { level: votes.length ? votes[votes.length - 1] : 'B1' };
     },
     async exampleEntry(word, definition, opts) {
       examples.push({ word, definition, opts });
@@ -258,9 +285,11 @@ test('POST /api/draft returns the senses from the shared entry core', async () =
   const { base } = await start(SORT_FIXTURE, { ai });
   const res = await post(base, '/api/draft', { word: 'attic', withChinese: true, model: 'qwen-max' });
   assert.equal(res.status, 200);
+  // 档位留空：草稿只交释义与例句，档位随后由五次投票来定（D30）。
   assert.deepEqual(res.body.senses, [
-    { level: 'B2', levelBasis: 'reference', definition: 'sense of attic', chinese: '释义', example: 'A fresh sentence for attic.' },
+    { level: null, definition: 'sense of attic', chinese: '释义', example: 'A fresh sentence for attic.' },
   ]);
+  assert.ok(res.body.trace, '逐步查表记录要随草稿一起给前端');
   assert.equal(res.body.note, '补齐了义项');
   assert.equal(res.body.word, 'attic');
   assert.ok(Array.isArray(res.body.referenceLevels.levels));
@@ -518,7 +547,8 @@ test('GET /api/settings returns defaults, prompt defaults and contracts without 
   assert.match(body.promptDefaults.entry, /referenceLevels/);
   assert.equal(body.promptDefaults.draft, undefined);
   assert.match(body.contracts.judge, /^Output ONLY a JSON object/);
-  assert.match(body.contracts.entry, /levelBasis/);
+  assert.match(body.contracts.entry, /definition, chinese, example/);
+  assert.ok(!/levelBasis/.test(body.contracts.entry), '档位不由模型输出');
   assert.ok(!text.includes('sk-test'));
 });
 
@@ -809,7 +839,8 @@ test('a review round draws mastered words, judges them and settles in one write'
 });
 
 test('a learn round walks the study phase before the test phase', async () => {
-  const { base, file } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  const ai = fakeAi({ verdict: { pass: true, reason: 'ok', suggestion: '方向对，再想具体一点' } });
+  const { base, file } = await start(SESSION_FIXTURE, { ai });
   const started = await post(base, '/api/session/start', { mode: 'learn' });
   assert.equal(started.status, 200);
   assert.deepEqual(started.body.state.queue, [{ word: 'abyss', senses: [0] }]);
@@ -845,13 +876,19 @@ test('a learn round walks the study phase before the test phase', async () => {
 
   const answered = await post(base, '/api/session/answer', {
     word: 'abyss',
-    answers: [{ sense: 0, definition: 'a deep hole' }],
+    answers: [{ sense: 0, definition: 'a deep hole', example: 'The ship fell into the abyss.' }],
   });
   assert.equal(answered.status, 200);
   assert.deepEqual(answered.body.results, [
-    { sense: 0, pass: true, reason: 'ok', resolved: 'pass', via: null, attemptsLeft: 0 },
+    { sense: 0, pass: true, reason: 'ok', suggestion: '方向对，再想具体一点', resolved: 'pass', via: null, attemptsLeft: 0 },
   ]);
-  assert.ok(!('suggestion' in answered.body.results[0]));
+  // 例句跟着进 prompt；闭卷的敏感词用表内释义，但表内释义本身不发出去。
+  assert.equal(ai.judged[0].userExample, 'The ship fell into the abyss.');
+  assert.equal(ai.judged[0].storedDefinition, undefined);
+  assert.equal(ai.judgedOpts[0].exam, true);
+  assert.deepEqual(ai.judgedOpts[0].guard, { definitions: ['deep hole'], chinese: [] });
+  const revealed = await post(base, '/api/session/reveal', { word: 'abyss' });
+  assert.equal(revealed.body.senses[0].suggestion, '方向对，再想具体一点');
 
   const committed = await post(base, '/api/session/commit', {});
   assert.equal(committed.status, 200);
@@ -892,6 +929,22 @@ test('session start and answer validate their input', async () => {
   const gone = await post(base, '/api/session/reveal', { word: 'nope' });
   assert.equal(gone.status, 404);
   assert.equal(gone.body.error.code, 'wordNotFound');
+});
+
+test('session start takes the slider count and defaults per mode', async () => {
+  const { base } = await start(SESSION_FIXTURE, { ai: fakeAi() });
+  const wide = await start('### A\n\n' + Array.from({ length: 40 }, (_, i) => `- w${i}\n  - [ ] #B1 - meaning ${i} - Sentence ${i}.\n`).join(''), { ai: fakeAi() });
+  const picked = await post(wide.base, '/api/session/start', { mode: 'learn', count: 7 });
+  assert.equal(picked.status, 200);
+  assert.equal(picked.body.state.queue.length, 7);
+  const fallback = await post(wide.base, '/api/session/start', { mode: 'learn', force: true });
+  assert.equal(fallback.body.state.queue.length, 10);
+
+  for (const count of [0, -3, 2.5, '20', 501]) {
+    const bad = await post(base, '/api/session/start', { mode: 'review', count });
+    assert.equal(bad.status, 400, JSON.stringify(count));
+    assert.equal(bad.body.error.code, 'badCount');
+  }
 });
 
 test('session pause and resume keep the round', async () => {
@@ -1082,8 +1135,7 @@ test('POST /api/refactor sends the current entry and the reference levels, and r
   assert.equal(res.body.word, 'absorb');
   assert.deepEqual(res.body.senses, [
     {
-      level: 'B2',
-      levelBasis: 'reference',
+      level: null,
       definition: 'sense of absorb',
       chinese: '',
       example: 'A fresh sentence for absorb.',
@@ -1091,8 +1143,11 @@ test('POST /api/refactor sends the current entry and the reference levels, and r
     },
   ]);
   assert.equal(res.body.note, '补齐了义项');
+  // 结构上可写（服务端拿占位档位探的），但 sense.level 还是 null，等前端逐条投票填回来。
   assert.equal(res.body.writeable, true);
   assert.equal(res.body.error, null);
+  assert.equal(res.body.senses[0].level, null);
+  assert.ok(res.body.trace, '逐步查表记录要随重构建议一起给前端');
 
   const sent = ai.refactors[0].input;
   assert.equal(sent.word, 'absorb');
@@ -1103,6 +1158,22 @@ test('POST /api/refactor sends the current entry and the reference levels, and r
   assert.equal(sent.current.headDefinition, 'take in');
   assert.equal(sent.referenceLevels.word, 'absorb');
   assert.ok(Array.isArray(sent.referenceLevels.levels), '参考档位必须随请求一起给模型');
+});
+
+test('词头带方括号在入口就被挡下（写进去整张表就解析不出来了）', async () => {
+  const { base, file } = await start(CEFR_FIXTURE, { ai: fakeAi() });
+  const before = fs.readFileSync(file);
+  for (const word of ['[x] atom', 'a]b']) {
+    const add = await post(base, '/api/commit-add', {
+      word,
+      senses: [{ level: 'B1', definition: 'x', example: 'X.' }],
+    });
+    assert.equal(add.status, 400, word);
+    assert.equal(add.body.error.code, 'badWord');
+    assert.equal((await post(base, '/api/commit-delete', { word })).status, 400);
+    assert.equal((await post(base, '/api/refactor', { word })).status, 400);
+  }
+  assert.deepEqual(fs.readFileSync(file), before);
 });
 
 test('POST /api/refactor reports 404 for a missing word and 503 without a model', async () => {
@@ -1204,4 +1275,162 @@ test('POST /api/commit-mastery skips unknown words, reports noops, and validates
   assert.equal((await post(base, '/api/commit-mastery', { words: [] })).status, 400);
   assert.equal((await post(base, '/api/commit-mastery', { words: ['absorb'], checked: 'yes' })).status, 400);
   assert.equal((await post(base, '/api/commit-mastery', { words: ['absorb', ''], checked: true })).status, 400);
+});
+
+test('POST /api/level/plan lists senses and marks which words the reference lists cover', async () => {
+  const { base } = await start(CEFR_FIXTURE, { ai: fakeAi(), cefr: fakeCefr({ outside: ['wordy'] }) });
+  const res = await post(base, '/api/level/plan', { words: ['wordy', 'absorb', 'nope'] });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.missing, ['nope']);
+  assert.deepEqual(
+    res.body.items.map((i) => [i.word, i.chapter, i.covered, i.checked]),
+    [
+      ['wordy', 'A', 0, false],
+      ['absorb', 'A', 1, false],
+    ],
+  );
+  assert.deepEqual(res.body.items[0].senses, [
+    {
+      sense: 0,
+      level: 'B2',
+      definition: 'using too many words',
+      chinese: null,
+      example: 'His essay was wordy and dull.',
+      checked: false,
+    },
+  ]);
+  assert.equal(res.body.items[0].referenceLevels.outside, true);
+  assert.deepEqual(res.body.items[1].referenceLevels.levels, [{ source: 'CEFR-J', pos: null, level: 'B1' }]);
+
+  assert.equal((await post(base, '/api/level/plan', {})).status, 400);
+  assert.equal((await post(base, '/api/level/plan', { words: [''] })).status, 400);
+});
+
+test('POST /api/level/vote asks five times and averages the levels back to a band', async () => {
+  const ai = fakeAi({ votes: ['C1', 'C1', 'B2', 'C1', 'C1'] });
+  const { base } = await start(CEFR_FIXTURE, { ai });
+  const res = await post(base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  assert.equal(res.status, 200);
+  const { referenceLevels, trace, ...rest } = res.body;
+  assert.deepEqual(rest, {
+    word: 'absorb',
+    sense: 0,
+    from: 'B1',
+    level: 'C1',
+    votes: ['C1', 'C1', 'B2', 'C1', 'C1'],
+    valid: 5,
+    agree: 4,
+    mean: 3.8,
+  });
+  assert.ok(res.body.referenceLevels.levels.length, '参考档位要一起回去');
+  assert.ok(res.body.trace.tiers.length, '逐步命中要一起回去');
+  assert.equal(ai.levelVotes.length, 5);
+  assert.equal(ai.levelVotes[0].input.word, 'absorb');
+  assert.equal(ai.levelVotes[0].input.definition, 'take in');
+  assert.equal(ai.levelVotes[0].input.example, 'Plants absorb water.');
+  assert.ok(ai.levelVotes[0].input.referenceLevels, '投票也要带上参考档位（D30）');
+  assert.equal(ai.levelVotes[0].opts.model, null);
+
+  const majority = fakeAi({ votes: ['B2', 'B2', 'B2', 'A2', 'B2'] });
+  const two = await start(CEFR_FIXTURE, { ai: majority });
+  const band = await post(two.base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  assert.deepEqual({ level: band.body.level, mean: band.body.mean, agree: band.body.agree }, { level: 'B2', mean: 2.6, agree: 4 });
+});
+
+test('POST /api/level/vote drops invalid votes, keeps a spare of five, and reports no votes at all', async () => {
+  const partial = fakeAi({ votes: ['B2', 'B2', 'XXXX', 'C1', 'B2'] });
+  const { base } = await start(CEFR_FIXTURE, { ai: partial });
+  const res = await post(base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  assert.equal(res.status, 200);
+  assert.deepEqual({ level: res.body.level, valid: res.body.valid, agree: res.body.agree, mean: res.body.mean }, { level: 'B2', valid: 4, agree: 3, mean: 3.25 });
+
+  // 票数只剩两张时平均会落在半档上，四舍五入向上（偏难的那一侧）。
+  const tie = fakeAi({ votes: ['B2', 'A1', 'XXXX', 'XXXX', 'XXXX'] });
+  const tied = await start(CEFR_FIXTURE, { ai: tie });
+  const out = await post(tied.base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  assert.equal(out.body.valid, 2);
+  assert.equal(out.body.mean, 1.5);
+  assert.equal(out.body.level, 'B1');
+
+  const none = fakeAi({ votes: ['XXXX', 'XXXX', 'XXXX', 'XXXX', 'XXXX'] });
+  const empty = await start(CEFR_FIXTURE, { ai: none });
+  const bad = await post(empty.base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  assert.equal(bad.status, 502);
+  assert.match(bad.body.error.code, /noLevelVotes|aiField/);
+});
+
+// 点「终止」= 关掉这条连接。服务端要把它变成信号往下传，让还在跑的五次投票一起停；
+// 连接已经没了就别再写响应（写一个销毁了的 socket 会炸掉进程）。
+test('closing the connection aborts the running votes and writes nothing back', async () => {
+  const signals = [];
+  const ai = fakeAi();
+  ai.levelVote = (input, opts) =>
+    new Promise((_, reject) => {
+      signals.push(opts.signal);
+      opts.signal.addEventListener('abort', () =>
+        reject(Object.assign(new Error('已终止'), { code: 'aiAborted' })),
+      );
+    });
+  const { base, file } = await start(CEFR_FIXTURE, { ai });
+  const before = fs.readFileSync(file);
+  const ac = new AbortController();
+  const request = fetch(`${base}/api/level/vote`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ word: 'absorb', sense: 0 }),
+    signal: ac.signal,
+  }).catch(() => 'aborted');
+
+  for (let i = 0; i < 100 && signals.length < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(signals.length, 5, '五次投票都发出了信号');
+  ac.abort();
+  assert.equal(await request, 'aborted');
+  for (let i = 0; i < 100 && !signals.every((s) => s.aborted); i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(signals.every((s) => s.aborted), '断开连接后五次调用都被中止');
+  assert.deepEqual(fs.readFileSync(file), before, '复判不写盘');
+});
+
+test('POST /api/level/vote validates its target and surfaces the real upstream failure', async () => {
+  const { base } = await start(CEFR_FIXTURE, { ai: fakeAi() });
+  assert.equal((await post(base, '/api/level/vote', { word: 'nope', sense: 0 })).status, 404);
+  assert.equal((await post(base, '/api/level/vote', { word: 'absorb', sense: 9 })).status, 400);
+  assert.equal((await post(base, '/api/level/vote', { word: 'absorb', sense: -1 })).status, 400);
+
+  const noAi = await start(CEFR_FIXTURE);
+  assert.equal((await post(noAi.base, '/api/level/vote', { word: 'absorb' })).status, 503);
+
+  const broken = fakeAi({ throwError: Object.assign(new Error('没配模型'), { code: 'aiConfig' }) });
+  const down = await start(CEFR_FIXTURE, { ai: broken });
+  const err = await post(down.base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  assert.equal(err.status, 503);
+  assert.equal(err.body.error.code, 'aiConfig');
+});
+
+test('POST /api/level/commit writes the whole batch in one go with one backup', async () => {
+  const { base, file, dir } = await start(CEFR_FIXTURE);
+  const res = await post(base, '/api/level/commit', {
+    items: [
+      { word: 'wordy', senses: [{ level: 'C1', definition: 'using too many words', example: 'His essay was wordy and dull.' }] },
+      { word: 'cliché', senses: [{ level: 'B1', definition: 'overused phrase', example: 'His speech was full of clichés.' }], checked: false },
+      { word: 'nope', senses: [{ level: 'B1', definition: 'x', example: 'X.' }] },
+    ],
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.changed, 2);
+  assert.deepEqual(res.body.failed, [{ word: 'nope', reason: 'wordNotFound', message: '未找到词头：nope' }]);
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes('- wordy\n  - [ ] #C1 - using too many words - His essay was wordy and dull.'));
+  assert.ok(text.includes('- cliché\n  - [ ] #B1 - overused phrase - His speech was full of clichés.'));
+
+  const before = fs.readFileSync(file);
+  assert.equal((await post(base, '/api/level/commit', {})).status, 400);
+  assert.equal((await post(base, '/api/level/commit', { items: [7] })).status, 400);
+  const noop = await post(base, '/api/level/commit', {
+    items: [{ word: 'wordy', senses: [{ level: 'C1', definition: 'using too many words', example: 'His essay was wordy and dull.' }] }],
+  });
+  assert.equal(noop.body.changed, 0);
+  assert.equal(noop.body.backup, null);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
 });

@@ -11,7 +11,6 @@ import {
   planInsertEntry,
   planSetChecked,
   planSetEntry,
-  planSetSenseChecked,
   planSetSenses,
   planSetSensesChecked,
 } from './vocab.js';
@@ -19,7 +18,7 @@ import { createStore, createStateFile } from './store.js';
 import { createSession } from './session.js';
 import { createAi, defaultPrompts, CONTRACTS } from './ai.js';
 import { createSettings, DEFAULTS, modelEndpoints } from './settings.js';
-import { createCefr } from './cefr.js';
+import { createCefr, CEFR_LEVELS } from './cefr.js';
 import { loadConfig } from './config.js';
 
 const PUBLIC = path.join(import.meta.dirname, 'public');
@@ -29,15 +28,14 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
 };
 const BODY_LIMIT = 1_000_000;
+// 档位复判（任务三）一轮问几次：五次取平均，票数少了平均没意义。
+const LEVEL_VOTES = 5;
 const AI_STATUS = { aiConfig: 503, aiHttp: 502, aiNetwork: 502, aiEmpty: 502, aiJson: 502, aiShape: 502 };
 const PLAN_STATUS = {
   wordExists: 409,
-  duplicateWord: 409,
-  duplicateChapter: 409,
   parseErrors: 409,
   wordNotFound: 404,
 };
-const JOB_STATUS = { badBatchSize: 400, badWords: 400, jobRunning: 409, jobNotFound: 404 };
 const SESSION_STATUS = {
   examNotRunning: 409,
   examRunning: 409,
@@ -51,7 +49,7 @@ const SESSION_STATUS = {
   examDone: 409,
   emptyScope: 400,
   badMode: 400,
-  badAnswer: 400,
+  badCount: 400,
   badAnswers: 400,
   badSense: 400,
   badLang: 400,
@@ -67,12 +65,23 @@ function httpError(status, code, message, details) {
 }
 
 function sendJson(res, status, body) {
+  // 客户端中途断开（界面上的「终止」）之后这里还会被走到：往销毁了的 socket 上写会抛，
+  // 抛在处理函数外面就是未捕获异常。连接没了就没什么可回的，直接收工。
+  if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(body));
 }
 
 function sendError(res, status, code, message, details) {
   sendJson(res, status, { error: { code, message, ...(details ? { details } : {}) } });
+}
+
+// 上游失败原样端上去：没配模型就是 503、上游抽风就是 502，认不出的码按 502 兜底。
+// 个别路由要另判（「测试连通」把 aiConfig 当输入错误报 400），用 configStatus 覆盖，
+// 并顺手带上上游响应体。
+function upstreamError(e, { configStatus = AI_STATUS.aiConfig, details } = {}) {
+  const status = e.code === 'aiConfig' ? configStatus : AI_STATUS[e.code] || 502;
+  return httpError(status, e.code || 'aiUnknown', e.message, details);
 }
 
 function project(e) {
@@ -110,6 +119,31 @@ function vocabFileProblem(p) {
   }
 }
 
+// 一批条目一次写盘、一份备份：重构与档位复判共用同一条写盘路径。
+function commitEntries(store, items) {  return store.enqueue(() => {
+    const text = store.readFile();
+    const edits = [];
+    const failed = [];
+    let written = 0;
+    for (const item of items) {
+      if (!item || typeof item.word !== 'string' || !item.word.trim()) {
+        throw httpError(400, 'badItems', 'items 每项需要 word');
+      }
+      const word = item.word.trim();
+      const plan = planSetEntry(text, word, { senses: item.senses, checked: item.checked });
+      if (plan.error) {
+        failed.push({ word, reason: plan.error.code, message: plan.error.message });
+        continue;
+      }
+      if (plan.noop) continue;
+      edits.push(...plan.edits);
+      written += 1;
+    }
+    const backup = edits.length ? store.writeWithBackup(applyEdits(text, edits)).backup : null;
+    return { status: 200, body: { changed: written, failed, backup } };
+  });
+}
+
 function readEntries(store) {
   const { entries, errors, stats } = parse(store.readFile());
   if (errors.length) {
@@ -126,6 +160,8 @@ function readWord(body) {
   if (!word || word.includes(' - ')) {
     throw httpError(400, 'badWord', '词头不能为空或含分隔符');
   }
+  // 方括号会把词头写成 `- [x] atom`——那是带框主行的形状，整张表从此解析不出来。
+  if (/[[\]]/.test(word)) throw httpError(400, 'badWord', '词头不能包含方括号');
   return word;
 }
 
@@ -185,16 +221,14 @@ function serveStatic(name, res) {
   fs.createReadStream(abs).pipe(res);
 }
 
-export function createApp({ store, config, ai, settings, session, openFile, cefr }) {
+export function createApp({ store, config, ai, settings, session, cefr }) {
   const openInEditor = (file) =>
-    openFile
-      ? openFile(file)
-      : new Promise((resolve, reject) => {
-          const child = spawn('notepad.exe', [file], { detached: true, stdio: 'ignore' });
-          child.on('error', reject);
-          child.unref();
-          resolve();
-        });
+    new Promise((resolve, reject) => {
+      const child = spawn('notepad.exe', [file], { detached: true, stdio: 'ignore' });
+      child.on('error', reject);
+      child.unref();
+      resolve();
+    });
   const grades = cefr || createCefr({ dataFile: config.cefrFile });
   const sessionRunner =
     session ||
@@ -271,6 +305,40 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
     }
   }
 
+  // 五次并行定档：串行要等五个来回，并行只等一个；问不出来（网络、坏 JSON、非法档位）的
+  // 那些票记空票，不因为一张票废掉整条义项。参考档位一并交给模型，采信与否由它自己判断。
+  async function voteLevel({ word, definition, example, referenceLevels, model }, signal) {
+    const settled = await Promise.allSettled(
+      Array.from({ length: LEVEL_VOTES }, () =>
+        ai.levelVote({ word, definition, example, referenceLevels }, { model, signal }),
+      ),
+    );
+    const votes = settled.map((r) => (r.status === 'fulfilled' ? r.value.level : null));
+    // 只认 CEFR 六档的票：网络失败、坏 JSON、模型报了别的档位都算空票，不进平均。
+    const valid = votes.filter((v) => CEFR_LEVELS.includes(v));
+    if (!valid.length) {
+      // 一张票都没成：把真实的失败原因端上去（没配模型就是 503、上游抽风就是 502），
+      // 别让它埋在一句「没定出档位」后面。
+      const first = settled.find((r) => r.status === 'rejected');
+      throw httpError(
+        AI_STATUS[first?.reason?.code] || 502,
+        first?.reason?.code || 'noLevelVotes',
+        first?.reason?.message || `五次都没给出合法档位：${JSON.stringify(votes)}`,
+      );
+    }
+    const numbers = valid.map((v) => CEFR_LEVELS.indexOf(v));
+    const mean = numbers.reduce((a, b) => a + b, 0) / numbers.length;
+    // 平均后再四舍五入回档；.5 向上（偏向更难的那一档），并列时有记录可查。
+    const level = CEFR_LEVELS[Math.min(CEFR_LEVELS.length - 1, Math.max(0, Math.round(mean)))];
+    return {
+      level,
+      votes,
+      valid: valid.length,
+      agree: votes.filter((v) => v === level).length,
+      mean: Number(mean.toFixed(2)),
+    };
+  }
+
   const postRoutes = {
     '/api/draft': async (req) => {
       if (!ai) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
@@ -288,10 +356,11 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
             senses: d.senses,
             note: d.note,
             referenceLevels: grades.describe(word),
+            trace: grades.trace(word),
           },
         };
       } catch (e) {
-        throw httpError(AI_STATUS[e.code] || 502, e.code || 'aiUnknown', e.message);
+        throw upstreamError(e);
       }
     },
 
@@ -306,7 +375,7 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
         });
         return { status: 200, body: example };
       } catch (e) {
-        throw httpError(AI_STATUS[e.code] || 502, e.code || 'aiUnknown', e.message);
+        throw upstreamError(e);
       }
     },
 
@@ -335,8 +404,7 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
       try {
         return { status: 200, body: await ai.testTarget(target) };
       } catch (e) {
-        if (e.code === 'aiConfig') throw httpError(400, e.code, e.message);
-        throw httpError(AI_STATUS[e.code] || 502, e.code || 'aiUnknown', e.message, e.body);
+        throw upstreamError(e, { configStatus: 400, details: e.body });
       }
     },
 
@@ -397,7 +465,7 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
           { lang: body.lang === 'en' || body.lang === 'zh' ? body.lang : currentSettings().lang },
         );
       } catch (e) {
-        throw httpError(AI_STATUS[e.code] || 502, e.code || 'aiUnknown', e.message);
+        throw upstreamError(e);
       }
       return {
         status: 200,
@@ -511,7 +579,7 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
       });
     },
 
-    '/api/refactor': async (req) => {
+    '/api/refactor': async (req, _url, signal) => {
       if (!ai) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
       const body = await readJson(req);
       const word = readWord(body);
@@ -535,17 +603,24 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
       try {
         proposal = await ai.sensesEntry(
           { word, current, referenceLevels, withChinese: entry.senses.some((s) => s.chinese) },
-          { model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : currentSettings().model },
+          { model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : currentSettings().model, signal },
         );
       } catch (e) {
-        throw httpError(AI_STATUS[e.code] || 502, e.code || 'aiUnknown', e.message);
+        throw upstreamError(e);
       }
       const senses = proposal.senses.map((s, i) => ({
         ...s,
         checked: entry.senses[i] ? entry.senses[i].checked : entry.checked,
       }));
       const checked = senses.every((s) => s.checked);
-      const plan = planSetEntry(text, word, { senses, checked });
+      // 只探「结构上能不能写」：档位这会儿还是 null（等投票），拿它去探会一律报
+      // badDifficulty，界面上就成了「无法写盘：难度必须属于 CEFR 六档：null」。档位一律是
+      // 合法六档之一，所以借用该条现有的档位（没有就用第一条的）来探，结论不受影响。
+      const probe = senses.map((s, i) => ({
+        ...s,
+        level: s.level || (entry.senses[i] && entry.senses[i].level) || entry.difficulty || 'B1',
+      }));
+      const plan = planSetEntry(text, word, { senses: probe, checked });
       return {
         status: 200,
         body: {
@@ -555,6 +630,7 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
           checked,
           note: proposal.note,
           referenceLevels,
+          trace: grades.trace(word),
           writeable: !plan.error,
           error: plan.error || null,
         },
@@ -565,28 +641,88 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
       const body = await readJson(req);
       const items = Array.isArray(body.items) ? body.items : [];
       if (!items.length) throw httpError(400, 'badItems', 'items 必须是非空数组');
-      return store.enqueue(() => {
-        const text = store.readFile();
-        const edits = [];
-        const failed = [];
-        let written = 0;
-        for (const item of items) {
-          if (!item || typeof item.word !== 'string' || !item.word.trim()) {
-            throw httpError(400, 'badItems', 'items 每项需要 word');
-          }
-          const word = item.word.trim();
-          const plan = planSetEntry(text, word, { senses: item.senses, checked: item.checked });
-          if (plan.error) {
-            failed.push({ word, reason: plan.error.code, message: plan.error.message });
-            continue;
-          }
-          if (plan.noop) continue;
-          edits.push(...plan.edits);
-          written += 1;
+      return commitEntries(store, items);
+    },
+
+    // 任务三：档位复判。plan 只出清单不调模型；vote 给一条义项跑五次取平均；commit 一次写盘。
+    '/api/level/plan': async (req) => {
+      const body = await readJson(req);
+      const words = Array.isArray(body.words) ? body.words : [];
+      if (!words.length) throw httpError(400, 'badWords', 'words 必须是非空数组');
+      const entries = readEntries(store).entries;
+      const items = [];
+      const missing = [];
+      for (const raw of words) {
+        const word = readWord({ word: raw });
+        const entry = entries.find((e) => e.word === word);
+        if (!entry) {
+          missing.push(word);
+          continue;
         }
-        const backup = edits.length ? store.writeWithBackup(applyEdits(text, edits)).backup : null;
-        return { status: 200, body: { changed: written, failed, backup } };
-      });
+        const referenceLevels = grades.describe(word);
+        // 档位依据没有落进 markdown，只有生成那一刻才知道。能复判的近似判据是「这个词
+        // 在参考词表里有没有东西可依」：levels 与 related 都空，当初那条档位就是 AI 自判的。
+        items.push({
+          word,
+          chapter: entry.chapter,
+          checked: entry.checked,
+          referenceLevels,
+          trace: grades.trace(word),
+          covered: referenceLevels.levels.length + referenceLevels.related.length,
+          senses: entry.senses.map((s, i) => ({
+            sense: i,
+            level: s.level,
+            definition: s.definition,
+            chinese: s.chinese ?? null,
+            example: s.example,
+            checked: Boolean(s.checked),
+          })),
+        });
+      }
+      return { status: 200, body: { items, missing } };
+    },
+
+    // 定档：给一条义项跑五次取平均（D28 起是唯一的定档路径，D30 起也是草稿与重构的定档路径）。
+    // 两种目标：词表里已有的按 sense 序号取；草稿卡里刚生成、还没写进词表的直接给 definition。
+    '/api/level/vote': async (req, _url, signal) => {
+      if (!ai) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
+      const body = await readJson(req);
+      const word = readWord(body);
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : currentSettings().model;
+      const referenceLevels = grades.describe(word);
+      const trace = grades.trace(word);
+      const definition = typeof body.definition === 'string' ? body.definition.trim() : '';
+      if (definition) {
+        const out = await voteLevel({
+          word,
+          definition,
+          example: typeof body.example === 'string' ? body.example.trim() : '',
+          referenceLevels,
+          model,
+        }, signal);
+        return { status: 200, body: { word, sense: null, from: null, referenceLevels, trace, ...out } };
+      }
+      const entry = readEntries(store).entries.find((e) => e.word === word);
+      if (!entry) throw httpError(404, 'wordNotFound', `未找到词头：${word}`);
+      const index = body.sense === undefined ? 0 : body.sense;
+      if (!Number.isInteger(index) || index < 0) throw httpError(400, 'badSense', 'sense 必须是非负整数');
+      const sense = senseList(entry)[index];
+      if (!sense) throw httpError(400, 'badSense', `义项序号超出范围：${index}`);
+      const out = await voteLevel({
+        word,
+        definition: sense.definition || entry.definition,
+        example: sense.example,
+        referenceLevels,
+        model,
+      }, signal);
+      return { status: 200, body: { word, sense: index, from: sense.level, referenceLevels, trace, ...out } };
+    },
+
+    '/api/level/commit': async (req) => {
+      const body = await readJson(req);
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (!items.length) throw httpError(400, 'badItems', 'items 必须是非空数组');
+      return commitEntries(store, items);
     },
 
     '/api/session/start': (req) =>
@@ -663,8 +799,15 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
       return sendError(res, known ? 405 : 404, known ? 'methodNotAllowed' : 'notFound', known ? `${pathname} 只接受 POST 或 GET` : `未知接口：${pathname}`);
     }
 
+    // 一批定档/重构要跑几十上百次上游调用，界面上的「终止」就是把这条连接关掉。连接一断就
+    // 把信号往下传，让还在等上游的那些 fetch 一起停手——不然它们会接着烧到有结果为止。
+    const client = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) client.abort();
+    });
+
     try {
-      const { status, body } = await table[pathname](req, url);
+      const { status, body } = await table[pathname](req, url, client.signal);
       sendJson(res, status, body);
     } catch (e) {
       if (e.status) sendError(res, e.status, e.code, e.message, e.details);

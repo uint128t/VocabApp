@@ -210,8 +210,44 @@ export function lookup(index, raw) {
   return null;
 }
 
-export function sourceLabel(result) {
-  if (!result) return 'CEFR 表外';
+// 定档用的逐步记录：哪一步查到了什么、哪一步空手而归。给界面上的「定档依据」方块看，
+// 与 lookup/describe 走同一套数据，只是把过程留下来。
+export function traceLookup(index, raw) {
+  const { base } = parseQuery(raw);
+  if (!base) return null;
+  const tiers = TIER.map((name) => {
+    const plain = index.lists[name][base] || null;
+    const pos = (index.byPos.get(base) || []).filter((h) => h.source === name);
+    return {
+      key: name,
+      source: SOURCES[name],
+      plain,
+      pos: pos.map((h) => ({ pos: h.pos, level: h.level })),
+    };
+  });
+
+  const lemmas = lemmaCandidates(base);
+  const families = familyCandidates(base).filter((f) => !lemmas.includes(f));
+  const derived = (form, via) => {
+    const hit = fromList(index, form, ['cefrj', 'octanove', 'oxford']);
+    return hit
+      ? { form, via, level: hit.level, source: SOURCES[hit.source] || hit.source, how: hit.how, base: hit.base }
+      : { form, via, level: null, source: null, how: null, base: null };
+  };
+  const rank = index.rank.get(base) || null;
+  const band = rank ? (index.bands || []).find((b) => rank <= b.max) : null;
+
+  return {
+    word: base,
+    tiers,
+    lemma: lemmas.map((f) => derived(f, 'lemma')),
+    root: families.map((f) => derived(f, 'root')),
+    rank,
+    band: band ? band.level : null,
+  };
+}
+
+export function sourceLabel(result) {  if (!result) return 'CEFR 表外';
   const name = SOURCES[result.source] || result.source;
   if (result.viaLemma) return `${name}（词形归并自 ${result.viaLemma}）`;
   if (result.viaRoot) return `${name}（词根推测自 ${result.viaRoot}）`;
@@ -222,13 +258,11 @@ export function sourceLabel(result) {
 
 export function createCefr({ dataFile = path.join(import.meta.dirname, 'data', 'cefr.json'), fsImpl = fs } = {}) {
   let index = null;
-  let meta = null;
   const load = () => {
     if (index) return index;
     const raw = JSON.parse(fsImpl.readFileSync(dataFile, 'utf8'));
     if (raw.version !== 1) throw new Error(`CEFR 数据版本不支持：${raw.version}`);
     index = createIndex(raw);
-    meta = { sources: raw.sources, bands: raw.freqBands, size: Object.keys(raw.lists.cefrj).length };
     return index;
   };
   return {
@@ -236,10 +270,7 @@ export function createCefr({ dataFile = path.join(import.meta.dirname, 'data', '
       const result = lookup(load(), word);
       return result ? { ...result, label: sourceLabel(result) } : { level: null, source: null, label: 'CEFR 表外' };
     },
-    sources: () => {
-      load();
-      return meta;
-    },
+    trace: (word) => traceLookup(load(), word),
     describe: (word) => {
       const idx = load();
       const { base } = parseQuery(word);

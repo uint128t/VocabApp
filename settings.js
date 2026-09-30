@@ -60,7 +60,7 @@ function normalizeModel(entry, keyNames) {
   return { name, baseUrl, keyName, ...(extra ? { extra } : {}) };
 }
 
-export function mergeSettings(current, patch, { keyNames } = {}) {
+function mergeSettings(current, patch, { keyNames } = {}) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return bad('设置必须是对象');
   const next = structuredClone(current);
 

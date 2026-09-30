@@ -1,8 +1,10 @@
 import { parse, planSetSensesChecked, applyEdits } from './vocab.js';
 
 const MAX_ATTEMPTS = 3;
-// 一轮抽多少个词：学习看 10 个，复习抽 30 个。
-const COUNT = { learn: 10, review: 30 };
+// 一轮抽多少个词：滑块给的值优先，没给就用这两个默认（学习 10、复习 30）。
+const DEFAULT_COUNT = { learn: 10, review: 30 };
+// 上限只是防呆：真给多了也会被池子截断，这个数字比任何池子都大。
+const COUNT_MAX = 500;
 const MODES = ['learn', 'review'];
 // v4：按模式分池（learn 抽未掌握、review 抽已掌握），学习模式多了「先看后考」两段。
 // v3 及更早的状态文件直接当作没有进行中的轮次。
@@ -37,6 +39,16 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
     state.updatedAt = new Date().toISOString();
     stateFile.write(state);
     return state;
+  };
+
+  // 判词要等上游（几秒到几十秒），这中间用户可能刚点了暂停或放弃。save 落的是进门时那份
+  // 快照，直接写回去会把那次暂停/放弃抹掉——所以落盘前以磁盘上的状态为准。要是这一轮已经
+  // 被结算、放弃或重开顶掉了（id 变了），这份旧快照整个作废，别写回去盖住新的那一轮。
+  const saveJudgment = (state) => {
+    const disk = load();
+    if (!disk || disk.id !== state.id) return state;
+    if (disk.status !== 'running') state.status = disk.status;
+    return save(state);
   };
 
   const entries = () => parse(store.readFile()).entries;
@@ -87,6 +99,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
     const senses = (entry ? entry.senses : []).map((sense, i) => {
       const rec = state.records[keyOf(item.word, i)];
       const attempts = rec ? rec.attempts.length : 0;
+      const last = rec && rec.attempts.length ? rec.attempts[rec.attempts.length - 1] : null;
       return {
         sense: i,
         level: sense.level,
@@ -94,7 +107,8 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
         checked: Boolean(sense.checked),
         result: rec && rec.result ? rec.result : null,
         via: rec && rec.via ? rec.via : null,
-        reason: rec && rec.attempts.length ? rec.attempts[rec.attempts.length - 1].reason : null,
+        reason: last ? last.reason : null,
+        suggestion: last ? last.suggestion || '' : '',
         attempts,
         attemptsLeft: rec && rec.result ? 0 : Math.max(0, state.maxAttempts - attempts),
       };
@@ -152,6 +166,11 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
   async function start(scope = {}) {
     const mode = scope.mode;
     if (!MODES.includes(mode)) throw err('badMode', 'mode 只能是 learn 或 review');
+    // 抽多少由滑块给（可选）；没给就用该模式的默认。池子不足时照旧抽多少算多少。
+    const count = scope.count === undefined ? DEFAULT_COUNT[mode] : scope.count;
+    if (!Number.isInteger(count) || count < 1 || count > COUNT_MAX) {
+      throw err('badCount', `抽词数量要是 1–${COUNT_MAX} 的整数`);
+    }
     const previous = load();
     const touched =
       previous && (previous.status === 'running' || previous.status === 'paused') &&
@@ -165,7 +184,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
       word: entry.word,
       senses: entry.senses.map((_, i) => i),
     }));
-    const queue = shuffle(drawn, random).slice(0, COUNT[mode]);
+    const queue = shuffle(drawn, random).slice(0, count);
     if (!queue.length) {
       throw err('emptyScope', mode === 'review' ? '还没有整词已掌握的词可以复习' : '没有还有义项没掌握的词可以学');
     }
@@ -224,8 +243,18 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
       if (sense === null || !item.senses.includes(sense)) {
         throw err('badSense', `义项序号不在本轮范围：${row && row.sense}`);
       }
-      said.set(sense, typeof row.definition === 'string' ? row.definition.trim() : '');
+      said.set(sense, {
+        definition: typeof row.definition === 'string' ? row.definition.trim() : '',
+        example: typeof row.example === 'string' ? row.example.trim() : '',
+      });
     }
+
+    // 闭卷点评的机械兜底要拿「这个词全部义项」的释义与中文做敏感词：一张卡上几条义项
+    // 同时在考，点评泄露隔壁义项也是泄密。
+    const guard = {
+      definitions: entry.senses.map((s) => s.definition).filter(Boolean),
+      chinese: entry.senses.map((s) => s.chinese).filter(Boolean),
+    };
 
     const results = [];
     try {
@@ -233,28 +262,31 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
         const key = keyOf(item.word, sense);
         const rec = state.records[key] ?? { attempts: [], result: null };
         if (rec.result) continue;
-        const definition = said.get(sense) || '';
-        if (!definition) {
+        const answer = said.get(sense) || { definition: '', example: '' };
+        if (!answer.definition) {
           rec.result = 'fail';
           rec.via = 'none';
           state.records[key] = rec;
-          results.push({ sense, pass: false, reason: 'blank', resolved: 'fail', via: 'none', attemptsLeft: 0 });
+          // 留空没有理由码可说：是「没写」而不是「判错了」，前端按 via 出固定文案。
+          results.push({ sense, pass: false, reason: null, resolved: 'fail', via: 'none', attemptsLeft: 0 });
           continue;
         }
         const verdict = await ai.judgeEntry(
           {
             word: item.word,
-            userDefinition: definition,
-            userExample: '',
+            userDefinition: answer.definition,
+            userExample: answer.example,
             targetExample: entry.senses[sense] ? entry.senses[sense].example : '',
           },
-          { model: state.model, lang: state.lang, exam: true },
+          { model: state.model, lang: state.lang, exam: true, guard },
         );
         rec.attempts.push({
-          userDefinition: definition,
-          userExample: '',
+          userDefinition: answer.definition,
+          userExample: answer.example,
           pass: verdict.pass,
           reason: verdict.reason,
+          // 点评要落盘：提交后前端会立刻重渲染一次，只放在响应里就永远看不到。
+          suggestion: verdict.suggestion || '',
           at: new Date().toISOString(),
         });
         const resolved = verdict.pass ? 'pass' : rec.attempts.length >= state.maxAttempts ? 'fail' : null;
@@ -264,6 +296,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
           sense,
           pass: verdict.pass,
           reason: verdict.reason,
+          suggestion: verdict.suggestion || '',
           resolved,
           via: null,
           attemptsLeft: resolved ? 0 : state.maxAttempts - rec.attempts.length,
@@ -271,10 +304,10 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
       }
     } catch (e) {
       // 上游半路出错：已经判出来的先落盘，重交时不会重复判。
-      save(state);
+      saveJudgment(state);
       throw e;
     }
-    save(state);
+    saveJudgment(state);
     const card = cardOf(item, state, byWord);
     return {
       word: item.word,
@@ -311,7 +344,8 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
       sense: index,
       resolved: 'fail',
       via: 'skip',
-      reason: '你标记为不会',
+      // 同上：`reason` 只装闭卷那套理由码，这条没调模型就没有码。
+      reason: null,
       done: card.done,
       open: card.open,
       nextWord: nextWordAfter(state, byWord, i),
@@ -345,12 +379,14 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
     entry.senses.forEach((sense, i) => {
       const rec = state.records[keyOf(word, i)];
       if (!rec || !rec.result) return;
+      const last = rec.attempts.length ? rec.attempts[rec.attempts.length - 1] : null;
       senses.push({
         sense: i,
         level: sense.level,
         result: rec.result,
         via: rec.via ?? null,
-        reason: rec.attempts.length ? rec.attempts[rec.attempts.length - 1].reason : null,
+        reason: last ? last.reason : null,
+        suggestion: last ? last.suggestion || '' : '',
         attempts: rec.attempts.length,
         definition: sense.definition || entry.definition,
         chinese: sense.chinese ?? null,

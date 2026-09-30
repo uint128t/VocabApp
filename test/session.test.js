@@ -49,8 +49,8 @@ function table(text, { verdicts = [], ai } = {}) {
 
 const setup = (opts) => table(FIXTURE, opts);
 
-const pass = { pass: true, reason: '到位' };
-const fail = { pass: false, reason: '义项跑偏' };
+const pass = { pass: true, reason: '到位', suggestion: '点评一句' };
+const fail = { pass: false, reason: '义项跑偏', suggestion: '点评一句' };
 const word = (w, senses = [0]) => ({ word: w, senses });
 const sense = (over) => ({
   sense: 0,
@@ -60,6 +60,7 @@ const sense = (over) => ({
   result: null,
   via: null,
   reason: null,
+  suggestion: '',
   attempts: 0,
   attemptsLeft: 3,
   ...over,
@@ -130,7 +131,7 @@ test('复习抽整词已掌握的词，没有看词段，直接开考', async ()
   assert.throws(() => session.nextStudy(), (e) => e.code === 'examOutOfOrder');
 });
 
-test('一轮的抽词条数有上限：学习 10 个、复习 30 个', async () => {
+test('一轮的抽词条数没给滑块值时用默认：学习 10 个、复习 30 个', async () => {
   const study = table(many(25, false));
   const s1 = await study.session.start({ mode: 'learn' });
   assert.equal(s1.queue.length, 10);
@@ -138,6 +139,34 @@ test('一轮的抽词条数有上限：学习 10 个、复习 30 个', async () 
   const review = table(many(35, true));
   const s2 = await review.session.start({ mode: 'review' });
   assert.equal(s2.queue.length, 30);
+});
+
+test('滑块给了几就抽几，只受池子大小限制', async () => {
+  const few = table(many(25, false));
+  assert.equal((await few.session.start({ mode: 'learn', count: 3 })).queue.length, 3);
+
+  const more = table(many(25, false));
+  assert.equal((await more.session.start({ mode: 'learn', count: 25 })).queue.length, 25);
+
+  // 复习的默认 30 也可以被覆盖，两个方向都行。
+  const review = table(many(35, true));
+  assert.equal((await review.session.start({ mode: 'review', count: 12 })).queue.length, 12);
+  const wide = table(many(35, true));
+  assert.equal((await wide.session.start({ mode: 'review', count: 35 })).queue.length, 35);
+
+  // 池子不够：抽多少算多少，不报错。
+  const small = table(FIXTURE);
+  assert.equal((await small.session.start({ mode: 'learn', count: 40 })).queue.length, 2);
+});
+
+test('抽词数量不是 1 以上的整数就拒绝', async () => {
+  for (const count of [0, -1, 1.5, '10', null, 501, true]) {
+    const { session } = table(many(600, false));
+    await assert.rejects(session.start({ mode: 'learn', count }), (e) => e.code === 'badCount', JSON.stringify(count));
+  }
+  // 上限本身是合法的
+  const top = table(many(600, false));
+  assert.equal((await top.session.start({ mode: 'learn', count: 500 })).queue.length, 500);
 });
 
 test('池子不够就抽多少算多少，池子是空的直接报错', async () => {
@@ -219,7 +248,7 @@ test('一条义项留空就记不会，不花调用', async () => {
   await learn(session);
   const res = await submit(session, { 0: '' });
   assert.deepEqual(res.results, [
-    { sense: 0, pass: false, reason: 'blank', resolved: 'fail', via: 'none', attemptsLeft: 0 },
+    { sense: 0, pass: false, reason: null, resolved: 'fail', via: 'none', attemptsLeft: 0 },
   ]);
   assert.equal(res.done, true);
   assert.equal(res.open, 0);
@@ -230,21 +259,39 @@ test('一条义项留空就记不会，不花调用', async () => {
   assert.deepEqual(rec.attempts, []);
 });
 
-test('一次通过记一次尝试，丢掉 suggestion，并给出下一个词', async () => {
+test('一次通过记一次尝试，点评跟着记录落盘，并给出下一个词', async () => {
   const { session, calls } = setup({ verdicts: [pass] });
   await learn(session);
   const res = await submit(session);
   assert.deepEqual(res, {
     word: 'abyss',
-    results: [{ sense: 0, pass: true, reason: '到位', resolved: 'pass', via: null, attemptsLeft: 0 }],
+    results: [{ sense: 0, pass: true, reason: '到位', suggestion: '点评一句', resolved: 'pass', via: null, attemptsLeft: 0 }],
     done: true,
     open: 0,
     nextWord: 'bump',
   });
   assert.equal(calls[0].opts.exam, true);
   assert.equal(calls[0].input.storedDefinition, undefined);
-  assert.ok(!('suggestion' in res.results[0]));
   assert.equal(calls[0].input.targetExample, 'The ship disappeared into the abyss.');
+  // 点评要落盘：只放在响应里，提交后那一刻的重渲染就会把它冲掉。
+  assert.equal(session.status().records['abyss#0'].attempts[0].suggestion, '点评一句');
+});
+
+test('例句跟着义项一起交出去，提交前的那一版留着可改', async () => {
+  const { session, calls } = setup({ verdicts: [fail, pass] });
+  await learn(session);
+  const cur = session.current();
+  const first = await session.answer({
+    word: cur.word,
+    answers: [{ sense: 0, definition: 'a deep hole', example: 'The ship sank into the abyss.' }],
+  });
+  assert.equal(first.results[0].resolved, null);
+  assert.equal(calls[0].input.userExample, 'The ship sank into the abyss.');
+  assert.equal(session.status().records['abyss#0'].attempts[0].userExample, 'The ship sank into the abyss.');
+
+  await session.answer({ word: cur.word, answers: [{ sense: 0, definition: 'nothingness' }] });
+  assert.equal(calls[1].input.userExample, '');
+  assert.equal(session.status().records['abyss#0'].attempts[1].userExample, '');
 });
 
 test('答错但还有机会时那一行留着，用完三次才判死', async () => {
@@ -255,6 +302,7 @@ test('答错但还有机会时那一行留着，用完三次才判死', async ()
     sense: 0,
     pass: false,
     reason: '义项跑偏',
+    suggestion: '点评一句',
     resolved: null,
     via: null,
     attemptsLeft: 2,
@@ -268,6 +316,7 @@ test('答错但还有机会时那一行留着，用完三次才判死', async ()
     sense: 0,
     pass: false,
     reason: '义项跑偏',
+    suggestion: '点评一句',
     resolved: 'fail',
     via: null,
     attemptsLeft: 0,
@@ -277,6 +326,26 @@ test('答错但还有机会时那一行留着，用完三次才判死', async ()
   const rec = session.status().records['abyss#0'];
   assert.equal(rec.result, 'fail');
   assert.equal(rec.attempts.length, 3);
+});
+
+test('闭卷判定拿到整词全部义项的释义与中文当敏感词', async () => {
+  const { session, calls } = table(MULTI, { verdicts: [pass, pass] });
+  await learn(session);
+  await session.answer({
+    word: session.current().word,
+    answers: [
+      { sense: 0, definition: 'the space between lines' },
+      { sense: 1, definition: 'to fish' },
+    ],
+  });
+  assert.deepEqual(calls[0].opts.guard, {
+    definitions: ['the space between two lines', 'to fish'],
+    chinese: [],
+  });
+  assert.deepEqual(calls[1].opts.guard, {
+    definitions: ['the space between two lines', 'to fish'],
+    chinese: [],
+  });
 });
 
 test('上游报错不算作答，也不消耗机会', async () => {
@@ -344,6 +413,7 @@ test('reveal 给整词已判完的义项，一条都没判完时锁着', async (
         result: 'pass',
         via: null,
         reason: '到位',
+        suggestion: '点评一句',
         attempts: 1,
         definition: 'the space between two lines',
         chinese: null,
@@ -355,6 +425,7 @@ test('reveal 给整词已判完的义项，一条都没判完时锁着', async (
         result: 'fail',
         via: 'none',
         reason: null,
+        suggestion: '',
         attempts: 0,
         definition: 'to fish',
         chinese: null,
@@ -567,7 +638,7 @@ test('「不会」把一条义项记成不会，不花调用', async () => {
     sense: 0,
     resolved: 'fail',
     via: 'skip',
-    reason: '你标记为不会',
+    reason: null,
     done: true,
     open: 0,
     nextWord: 'bump',
@@ -592,7 +663,62 @@ test('「不会」乱序、越界或重复都拒', async () => {
   assert.equal(session.current().word, 'bump');
 });
 
-test('整测式的答题只要释义，例句不传', async () => {
+// 判词要等上游好几秒，这中间用户点得动暂停/放弃。answer 落盘时用的是进门那份快照，
+// 直接写回去会把那次操作抹掉，一轮「已放弃」的会复活。
+test('判词还在飞的时候暂停，落盘不会把暂停顶掉', async () => {
+  let release;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  const slow = {
+    async judgeEntry() {
+      await gate;
+      return pass;
+    },
+  };
+  const { session } = table(FIXTURE, { ai: slow });
+  await learn(session);
+  const answering = submit(session, { 0: 'deep hole' });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(session.pause().ok, true);
+  assert.equal(session.status().status, 'paused');
+  release();
+  await answering;
+  assert.equal(session.status().status, 'paused', '判词落盘时不能把暂停顶掉');
+  // 继续之后，那次判定仍然算数（结果没丢）。
+  await session.resume();
+  assert.equal(session.status().records['abyss#0'].result, 'pass');
+});
+
+test('判词还在飞的时候放弃并重开，旧快照盖不掉新的一轮', async () => {
+  let release;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  const slow = {
+    async judgeEntry() {
+      await gate;
+      return pass;
+    },
+  };
+  const t = table(FIXTURE, { ai: slow });
+  await learn(t.session);
+  const answering = submit(t.session, { 0: 'deep hole' });
+  await new Promise((r) => setTimeout(r, 0));
+  await t.session.abort();
+  await t.session.start({ mode: 'review', force: true });
+  const fresh = t.session.status();
+  assert.equal(fresh.status, 'running');
+  assert.equal(fresh.mode, 'review');
+  release();
+  await answering;
+  const after = t.session.status();
+  assert.equal(after.id, fresh.id, '旧的那次作答不该把新一轮写回去');
+  assert.equal(after.mode, 'review');
+  assert.deepEqual(Object.keys(after.records), []);
+});
+
+test('不填例句就只判释义', async () => {
   const { session, calls } = setup({ verdicts: [pass] });
   await learn(session);
   const res = await submit(session);

@@ -117,7 +117,7 @@ export function createStore({ file, backupDir, maxBackups = 20, fs = realFs }) {
     return { entries, stats };
   };
 
-  return { target, sourceFile, backupDir, maxBackups, readFile, writeWithBackup, listBackups, enqueue, selfCheck };
+  return { target, readFile, writeWithBackup, listBackups, enqueue, selfCheck };
 }
 
 export function createStateFile({ file, fs = realFs }) {

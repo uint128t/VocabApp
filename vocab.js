@@ -217,15 +217,17 @@ function guard(parsed) {
   return null;
 }
 
+// 重复词头轮不到这里：parse 会把它记成错误，guard 在那之前就拦下了。
 function findByWord(parsed, word) {
-  const found = parsed.entries.filter((e) => e.word === word);
-  if (found.length === 0) return { error: err('wordNotFound', `未找到词头：${word}`) };
-  if (found.length > 1) return { error: err('duplicateWord', `词头重复：${word}`) };
-  return { entry: found[0] };
+  const entry = parsed.entries.find((e) => e.word === word);
+  if (!entry) return { error: err('wordNotFound', `未找到词头：${word}`) };
+  return { entry };
 }
 
+// 分隔符是「- 词头 - 释义 - 例句」这套写法的骨架：释义里能出现它就会被拆错，
+// 例句里同样——写进去之后再 parse，例句会被当成释义的尾巴。两层都拦住。
 function validExample(example) {
-  return typeof example === 'string' && example.trim() !== '' && !example.includes('\n');
+  return typeof example === 'string' && example.trim() !== '' && !example.includes('\n') && !example.includes(' - ');
 }
 
 function entryLines({ word, senses }) {
@@ -255,7 +257,7 @@ function validateSense(sense) {
     return err('badDefinition', '义项释义不能为空或含换行');
   }
   if (sense.definition.includes(' - ')) return err('badDefinition', '义项释义不能包含分隔符');
-  if (!validExample(sense.example)) return err('badExample', '例句不能为空或含换行');
+  if (!validExample(sense.example)) return err('badExample', '例句不能为空、含换行或含分隔符「 - 」');
   if (sense.checked !== undefined && typeof sense.checked !== 'boolean') {
     return err('badChecked', '义项里的 checked 必须是布尔值');
   }
@@ -272,7 +274,9 @@ function validateFields({ word, checked, senses }) {
   if (typeof word !== 'string' || word.trim() === '' || word !== word.trim()) {
     return err('badWord', '词头不能为空或带首尾空格');
   }
+  // 方括号要挡住：`- [x] atom` 会被解析器当成「带框的主行」，整张表从此读不出来。
   if (word.includes(' - ') || word.includes('\n')) return err('badWord', '词头不能包含分隔符或换行');
+  if (/[[\]]/.test(word)) return err('badWord', '词头不能包含方括号');
   if (checked !== undefined && typeof checked !== 'boolean') return err('badChecked', 'checked 必须是布尔值');
   if (!senses.length) return err('badSenses', '每个词至少要有一条义项');
   for (const sense of senses) {
@@ -298,7 +302,6 @@ export function planInsertEntry(text, entry) {
   const key = sortKey(word);
   const letter = key ? key[0].toUpperCase() : word[0].toUpperCase();
   const same = parsed.chapters.filter((c) => c.letter.toUpperCase() === letter);
-  if (same.length > 1) return err('duplicateChapter', `章节重复：### ${letter}`);
 
   const lines = splitLines(text);
   const newLines = entryLines({ word, senses: sensesFromPatch(null, entry) });
@@ -353,12 +356,6 @@ export function planSetChecked(text, word, checked) {
   if (error) return error;
   if (typeof checked !== 'boolean') return err('badChecked', 'checked 必须是布尔值');
   return planSetSensesChecked(text, word, entry.senses.map((_, i) => ({ index: i, checked })));
-}
-
-export function planSetSenseChecked(text, word, index, checked) {
-  if (!Number.isInteger(index) || index < 0) return err('badSense', `义项序号超出范围：${index}`);
-  if (typeof checked !== 'boolean') return err('badChecked', 'checked 必须是布尔值');
-  return planSetSensesChecked(text, word, [{ index, checked }]);
 }
 
 export function planSetSensesChecked(text, word, states) {
