@@ -5,7 +5,9 @@ import { parse } from './vocab.js';
 
 export const AUTO_BACKUP = /^Vocabulary\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z?(?:-\d+)?\.md$/;
 
-export function createStore({ file, backupDir, maxBackups = 20, fs = realFs }) {
+// maxBackups 管的是自动备份的轮转上限：每次写盘都会把当前内容存一份，攒够 30 份之后
+// 多出来的从最老的开始删。文件名带自定义后缀的不算在内（那是手存的，不该被轮转吃掉）。
+export function createStore({ file, backupDir, maxBackups = 30, fs = realFs }) {
   let seq = 0;
   let queue = Promise.resolve();
 

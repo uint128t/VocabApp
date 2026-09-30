@@ -62,9 +62,9 @@ test('a failing write leaves the original file untouched and no temp file behind
   assert.deepEqual(leftovers, []);
 });
 
-test('rotation keeps the newest 20 auto backups and never touches named ones', () => {
+test('rotation keeps the newest 30 auto backups and never touches named ones', () => {
   const seeded = [];
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 35; i++) {
     const name = `Vocabulary.${stamp(i + 1)}.md`;
     seeded.push(name);
   }
@@ -77,9 +77,9 @@ test('rotation keeps the newest 20 auto backups and never touches named ones', (
 
   const res = store.writeWithBackup(NEW);
   const kept = fs.readdirSync(backupDir).filter((n) => AUTO_BACKUP.test(n)).sort();
-  assert.equal(kept.length, 20);
+  assert.equal(kept.length, 30);
   assert.ok(kept.includes(res.backup));
-  assert.deepEqual(kept, [...sorted.slice(-19), res.backup].sort());
+  assert.deepEqual(kept, [...sorted.slice(-29), res.backup].sort());
   for (const gone of sorted.slice(0, 6)) assert.ok(!kept.includes(gone), `${gone} should be pruned`);
   assert.ok(fs.readdirSync(backupDir).includes(manual));
 });
