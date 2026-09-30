@@ -99,7 +99,6 @@
               <label class="inline-field count-field">抽词
                 <input id="learnCount" type="range" min="1" max="50" step="1" value="10" />
                 <input id="learnCountNum" class="count-num" type="number" min="1" step="1" value="10" />
-                <span class="count"><b id="learnCountText"></b><i class="pool-note" id="learnCountPool"></i></span>
               </label>
               <span id="learnProgress" class="count"></span>
               <span class="spacer"></span>
@@ -123,7 +122,6 @@
               <label class="inline-field count-field">抽词
                 <input id="reviewCount" type="range" min="1" max="50" step="1" value="30" />
                 <input id="reviewCountNum" class="count-num" type="number" min="1" step="1" value="30" />
-                <span class="count"><b id="reviewCountText"></b><i class="pool-note" id="reviewCountPool"></i></span>
               </label>
               <span id="reviewProgress" class="count"></span>
               <span class="spacer"></span>
@@ -168,7 +166,7 @@
                     </select>
                   </label>
                 </div>
-                <p class="hint">主题与语言在这里保存后，头部按钮只做快速循环；判定面板仍可对单次提问临时改语言。</p>
+                <p class="hint">主题在这里保存后，头部那颗「主题」按钮只做快速循环（点一下即存）；反馈语言没有快捷入口，这里存的是默认值，学习与复习面板的工具栏可以单独改本轮的语言。</p>
               </fieldset>
 
               <fieldset>
@@ -184,7 +182,7 @@
                   <button id="addModel" class="btn" type="button">添加</button>
                 </div>
                 <div class="row">
-                  <input id="newModelExtra" type="text" placeholder='附加参数 JSON（可选），如 {"enable_thinking": false}' />
+                  <input id="newModelExtra" type="text" placeholder='附加参数 JSON（可选），如 {"thinking": null} 表示摘掉这个字段' />
                 </div>
                 <div class="row" id="modelList"></div>
                 <div class="row">
@@ -217,7 +215,7 @@
                   <button type="button" class="btn ghost reset-prompt" data-prompt="judge">恢复默认</button>
                   <code class="contract" id="contractJudge"></code>
                 </div>
-                <p class="hint">清空文本域等于恢复默认。契约行（JSON 结构、字段名、CEFR 枚举、原样回显）永远追加在最后，改不掉。</p>
+                <p class="hint">清空文本域等于恢复默认。契约行（JSON 结构、字段名、枚举）永远追加在最后，改不掉。生成例句与定档（复判）这两路的提示词不在设置里，不提供覆盖。</p>
               </fieldset>
 
               <div class="row">

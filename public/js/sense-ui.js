@@ -1,12 +1,12 @@
 // 义项相关的公共零件：档位下拉、编辑行、答题目用的义项行、义项小标签。
 // 词表、加词、学习、复习四个面板都从这里取。
 
-import { $, CEFR, api } from './core.js';
+import { $, CEFR, api, inChunks, VOTE_BATCH } from './core.js';
 import { levelCard } from './level-card.js';
 
 function levelSelect(current) {
   const sel = document.createElement('select');
-  // 档位由五次投票定；还没投票时留一个空的「待定」，别假装有个档位。
+  // 档位由三次投票定；还没投票时留一个空的「待定」，别假装有个档位。
   const blank = document.createElement('option');
   blank.value = '';
   blank.textContent = '待定';
@@ -111,28 +111,65 @@ function levelSourceLine(referenceLevels) {
   return [...bySource.values()].map((l) => `${l.source} ${l.level}`);
 }
 
-// 给一条义项定档：服务端跑五次取平均。加词草稿与重构预览都走它。
-// signal 是「终止」用的：传进去之后，连接一关服务端那边的五次调用也跟着停。
-function levelVote(payload, signal) {
-  return api('/api/level/vote', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal,
-  });
+// 没定出档位的那几条再进队列、跟着下一批重来，最多这么多轮（第一轮 + 两次重试）。
+const VOTE_ROUNDS = 3;
+
+// 一组义项一起定档：按 VOTE_BATCH 切批，批间并发（√n），每批一个请求。
+// items 是 [{target, ...}]，target 交给服务端；onRow(item, result, error) 由调用方决定怎么落界面。
+// 一批整体挂了（网络/上游）或者某条没定出档位，那几条会重新进队列、跟着下一批重来；
+// 重试到底还是不行，才按失败报给 onRow——这样一条坏数据不至于连累同批的其他条目（D37）。
+async function voteAll(items, { model, signal, onRow, onProgress } = {}) {
+  const total = items.length;
+  let done = 0;
+  let pending = items;
+  for (let round = 0; round < VOTE_ROUNDS && pending.length; round += 1) {
+    const last = round === VOTE_ROUNDS - 1;
+    const batches = [];
+    for (let i = 0; i < pending.length; i += VOTE_BATCH) batches.push(pending.slice(i, i + VOTE_BATCH));
+    const left = [];
+    await inChunks(
+      batches,
+      async (batch) => {
+        let results = null;
+        let error = null;
+        try {
+          const body = await api('/api/level/vote', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ targets: batch.map((it) => it.target), model }),
+            signal,
+          });
+          results = body.results;
+        } catch (e) {
+          error = e;
+        }
+        batch.forEach((it, k) => {
+          const res = results ? results[k] : null;
+          if (res && res.level) {
+            done += 1;
+            onRow(it, res, null);
+          } else if (last) {
+            onRow(it, null, error || new Error('这条没给出合法档位'));
+          } else {
+            left.push(it);
+          }
+        });
+        if (onProgress) onProgress(done, total);
+      },
+      null,
+      signal,
+    );
+    pending = left;
+    if (signal?.aborted) break;
+  }
+  // 中途被终止：剩下的按「还没跑」报回去，调用方按终止显示。
+  if (signal?.aborted) for (const it of pending) onRow(it, null, signal.reason instanceof Error ? signal.reason : new Error('已终止'));
 }
 
 // 定完档把结果填回那一行的档位下拉与依据方块。
-async function voteSense(row, { word, model }, signal) {
-  const out = await levelVote({
-    word,
-    definition: row.api.def.value.trim(),
-    example: row.api.ex.value.trim(),
-    model,
-  }, signal);
+function applyVote(row, out) {
   row.api.level.value = out.level;
   row.api.card.api.update({ level: out.level, vote: out, trace: out.trace });
-  return out;
 }
 
 function readSenses(list) {
@@ -199,6 +236,6 @@ export {
   levelSourceLine,
   readSenses,
   answerRow,
-  levelVote,
-  voteSense,
+  voteAll,
+  applyVote,
 };

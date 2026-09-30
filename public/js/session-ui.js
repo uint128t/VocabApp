@@ -8,7 +8,7 @@ import { answerRow, levelTag } from './sense-ui.js';
 import { loadEntries } from './vocab-list.js';
 import { settings } from './settings-panel.js';
 
-const REFS = ['Start', 'Pause', 'Resume', 'Abort', 'Restart', 'Lang', 'Count', 'CountNum', 'CountText', 'CountPool', 'Progress', 'Card', 'Feedback', 'Result'];
+const REFS = ['Start', 'Pause', 'Resume', 'Abort', 'Restart', 'Lang', 'Count', 'CountNum', 'Progress', 'Card', 'Feedback', 'Result'];
 
 // 滑块没给过值时按模式取默认；给过的值记在 localStorage 里，刷新页面不会跳回 10/30。
 const DEFAULT_COUNT = { learn: 10, review: 30 };
@@ -50,8 +50,8 @@ const mounted = [];
 const refreshAll = (note, typed) => Promise.all(mounted.map((m) => m.refresh(note, typed)));
 
 export function mountRound({ prefix, mode }) {
-  // 键名只把首字母变小写（CountText → countText）。整段小写会把多词的名字变成 counttext，
-  // 用 r.countText 取到的就是 undefined，而且要等到某个渲染分支才炸。
+  // 键名只把首字母变小写（CountNum → countNum）。整段小写会把多词的名字变成 countnum，
+  // 用 r.countNum 取到的就是 undefined，而且要等到某个渲染分支才炸。
   const ref = (name) => {
     const el = $(`#${prefix}${name}`);
     if (!el) throw new Error(`轮次面板缺元素：#${prefix}${name}`);
@@ -67,12 +67,6 @@ export function mountRound({ prefix, mode }) {
     return listState.entries.filter((e) => Boolean(e.checked) === want).length;
   }
 
-  // 数字与「可抽 N」分成两个节点：窄屏可以只把后半截藏掉，数字留下来。
-  function setCountText(value, pool) {
-    r.countText.textContent = pool ? `${value} 个` : '池子是空的';
-    r.countPool.textContent = pool ? `（可抽 ${pool}）` : '';
-  }
-
   // 滑块与数字框是同一个值的两种输入：拖动同步数字框，填数字同步滑块，两边都落盘。
   // 越界的数字在这里夹到 1–池子 之间（填得比池子大就是想全抽，夹上去比弹回去好懂）。
   function applyCount(raw) {
@@ -82,7 +76,6 @@ export function mountRound({ prefix, mode }) {
     r.count.value = String(value);
     r.countNum.value = String(value);
     localStorage.setItem(countKey, String(value));
-    setCountText(value, poolSize());
     return true;
   }
 
@@ -94,7 +87,6 @@ export function mountRound({ prefix, mode }) {
     r.countNum.max = String(max);
     r.count.value = String(value);
     r.countNum.value = String(value);
-    setCountText(value, pool);
     return value;
   }
 
@@ -130,15 +122,15 @@ export function mountRound({ prefix, mode }) {
       r.progress.textContent = '';
       return;
     }
+    // 结算与放弃是终局：这两个状态下这一行没东西可交代（面板上也没事可做），回到面板再念一遍
+    // 「已判 8/8 · 已结算」只是噪音。写回了几处、备份是哪份，在结算那一下由 toast 报过。
+    if (state.status !== 'running' && state.status !== 'paused') {
+      r.progress.textContent = '';
+      return;
+    }
     const done = `已判 ${plan.judged}/${plan.total} 条义项`;
-    const tail = state.status === 'paused' ? ' · 已暂停' : state.status === 'settled' ? ' · 已结算' : state.status === 'running' ? '' : ' · 已放弃';
     if (state.mode !== mode) {
-      // 只有那一轮还在跑才在这里提醒；已结算/已放弃的轮次归它自己的面板，别在另一个面板上
-      // 一直挂着一句「还没结束」。整轮都判完了就说去结算，别再说「接着做」。
-      if (state.status !== 'running' && state.status !== 'paused') {
-        r.progress.textContent = '';
-        return;
-      }
+      // 只有那一轮还在跑才在这里提醒；整轮都判完了就说去结算，别再说「接着做」。
       const label = MODE_LABEL[state.mode];
       r.progress.textContent =
         plan.total > 0 && plan.judged === plan.total
@@ -147,7 +139,7 @@ export function mountRound({ prefix, mode }) {
       return;
     }
     const where = study ? ` · 看第 ${study.index + 1}/${study.total} 个词` : current ? ` · 第 ${current.index + 1}/${current.total} 个词` : '';
-    r.progress.textContent = `${done}${where}${tail}`;
+    r.progress.textContent = `${done}${where}${state.status === 'paused' ? ' · 已暂停' : ''}`;
   }
 
   function syncControls(state) {
@@ -173,7 +165,7 @@ export function mountRound({ prefix, mode }) {
     title.textContent = study.word;
     const meta = document.createElement('span');
     meta.className = 'card-status';
-    meta.textContent = [`### ${study.chapter}`, `第 ${study.index + 1}/${study.total} 个词`].join(' · ');
+    meta.textContent = `第 ${study.index + 1}/${study.total} 个词`;
     head.append(title, meta);
 
     const hint = document.createElement('p');
@@ -258,11 +250,7 @@ export function mountRound({ prefix, mode }) {
     title.textContent = current.word;
     const meta = document.createElement('span');
     meta.className = 'card-status';
-    meta.textContent = [
-      `### ${current.chapter}`,
-      `第 ${current.index + 1}/${current.total} 个词`,
-      `${current.senses.length} 条义项`,
-    ].join(' · ');
+    meta.textContent = [`第 ${current.index + 1}/${current.total} 个词`, `${current.senses.length} 条义项`].join(' · ');
     head.append(title, meta);
 
     const hint = document.createElement('p');
@@ -427,20 +415,15 @@ export function mountRound({ prefix, mode }) {
     head.className = 'quiz-hint';
 
     if (state.status !== 'running') {
+      // 结算完、放弃完就收声：这两个状态没有可做的事，写回了几处、备份是哪份在动作那一瞬间
+      // 已经用 toast 报过，再回到面板不必重播一遍。只有暂停还摆着——那是在等你点「继续本轮」。
       if (state.status === 'paused') {
         head.textContent = `本轮已暂停 · 已判 ${plan.judged}/${plan.total} 条义项，点「继续本轮」接着做`;
-      } else if (state.status === 'settled') {
-        const s = state.settlement;
-        head.textContent = s
-          ? `本轮已结算 · 写回 ${s.words.length} 处勾选 · ${s.backup ? `备份 ${s.backup}` : '无需写盘'}${
-              s.skipped?.length ? ` · 跳过 ${s.skipped.length}` : ''
-            }`
-          : `本轮已结算 · 当时判定 ${plan.judged} 条义项`;
+        box.append(head);
+        box.hidden = false;
       } else {
-        head.textContent = `本轮已放弃 · 词表未改动（当时已判 ${plan.judged} 条义项）`;
+        box.hidden = true;
       }
-      box.append(head);
-      box.hidden = false;
       return;
     }
 

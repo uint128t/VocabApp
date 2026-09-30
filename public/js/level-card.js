@@ -1,5 +1,5 @@
 // 定档依据方块：收起来只有一行摘要，点开是方框形式的逐步依据——查表每一步命中了什么、
-// AI 的五次回答、最后的综合。加词（草稿卡）与词表（就地编辑、重构预览、重定档位）都用它，
+// AI 的几次回答、最后的综合。加词（草稿卡）与词表（就地编辑、重构预览、重定档位）都用它，
 // 所以单独一个模块，谁也不依赖谁。
 //
 // 它不认识 CEFR 常量也不发请求：调用方把 level / vote / trace 递进来，改的时候再递一次。
@@ -50,7 +50,7 @@ function voteBox(value) {
   return box;
 }
 
-export function levelCard({ level = null, vote = null, trace = null, error = null } = {}) {
+export function levelCard({ level = null, vote = null, trace = null, error = null, note = null } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'level-card';
 
@@ -86,7 +86,7 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
   });
 
   function update(next = {}) {
-    const state = { level, vote, trace, error, ...next };
+    const state = { level, vote, trace, error, note, ...next };
     const votes5 = state.vote?.votes || [];
     const level_ = state.level || state.vote?.level || null;
 
@@ -95,10 +95,15 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
     else delete tag.dataset.level;
     summary.textContent = [
       state.vote
-        ? `一致 ${state.vote.agree}/${state.vote.valid}${state.vote.valid < 5 ? `（${5 - state.vote.valid} 票空）` : ''}`
+        // 一共问了几票看 votes 本身，别把票数写死在这儿（票数改过一次了）。
+        ? `一致 ${state.vote.agree}/${state.vote.valid}${
+            votes5.length > state.vote.valid ? `（${votes5.length - state.vote.valid} 票空）` : ''
+          }`
         : null,
       state.error ? `定档失败：${state.error}` : null,
-      !state.vote && !state.error ? (level_ ? '表里现有的档位，没有定档记录' : '还没定档') : null,
+      !state.vote && !state.error
+        ? state.note || (level_ ? '表里现有的档位，没有定档记录' : '还没定档')
+        : null,
     ]
       .filter(Boolean)
       .join(' · ');
@@ -113,7 +118,7 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
 
     votes.replaceChildren();
     const label = document.createElement('b');
-    label.textContent = 'AI 五次';
+    label.textContent = votes5.length ? `AI ${votes5.length} 票` : 'AI 投票';
     votes.append(label);
     const boxes = document.createElement('span');
     boxes.className = 'vote-boxes';
@@ -132,7 +137,7 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
     const vText = document.createElement('span');
     vText.textContent = state.vote
       ? `均值 ${state.vote.mean} → ${state.vote.level} · ${state.vote.agree}/${state.vote.valid} 票一致`
-      : '等五次投票回来才有结论';
+      : '等投票回来才有结论';
     verdict.append(vLabel, vText);
     return state;
   }

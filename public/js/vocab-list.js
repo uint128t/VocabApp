@@ -1,8 +1,8 @@
 // 词表面板：统计与侧栏概览、列表渲染、就地编辑、复选与批量操作、重构建议面板、
 // 以及条目右下角的「考这个词」。
 
-import { $, CEFR, state, api, toast, text, fillSelect, inChunks } from './core.js';
-import { senseRow, readSenses, levelSourceLine, answerRow, levelVote } from './sense-ui.js';
+import { $, CEFR, state, api, toast, text, fillSelect, inChunks, usageMeter, estimate } from './core.js';
+import { senseRow, readSenses, levelSourceLine, answerRow, voteAll, applyVote } from './sense-ui.js';
 import { levelCard } from './level-card.js';
 import { settings } from './settings-panel.js';
 
@@ -362,7 +362,6 @@ function wordCheckCard(e, li) {
   const meta = document.createElement('span');
   meta.className = 'card-status';
   meta.textContent = [
-    `### ${e.chapter}`,
     `${(e.senses || []).length} 条义项`,
     e.checked ? '整词已掌握' : '还有义项没掌握',
   ].join(' · ');
@@ -555,8 +554,19 @@ function syncSelection() {
     : '未选中任何词';
   const none = selected.size === 0;
   // 批量跑着的时候一律锁住。这几个按钮的 disabled 本来有两个人写（这里按选中数量、跑起来时
-  // 按进度），中途被这里重新点亮就能起第二批，把前一批的「终止」顶掉。
-  for (const id of ['#markChecked', '#markUnchecked', '#refactorBtn', '#levelBtn']) $(id).disabled = none || batchBusy;
+  // 按进度），中途被这里重新点亮就能起第二批，把前一批的「终止」顶掉。锁上时挂一句 title：
+  // 光变灰没人知道为什么点不动。
+  // panelLock 是第二把锁：清单面板露面之后就一直摆着（除非刷新页面），那期间也不许起新的一轮——
+  // 两块面板都是单例，再跑一轮会把上一轮摆出来的结果直接抹掉。
+  for (const id of ['#markChecked', '#markUnchecked', '#refactorBtn', '#levelBtn']) {
+    const el = $(id);
+    el.disabled = none || batchBusy || panelLock;
+    el.title = batchBusy
+      ? '这一轮还在跑：等它跑完，或点旁边的「终止」'
+      : panelLock
+        ? '上面还摆着一份清单：写完它、或刷新页面，才能再起一轮'
+        : '';
+  }
   $('#selectAll').checked = shown.length > 0 && shown.every((e) => selected.has(e.word));
 }
 
@@ -599,72 +609,124 @@ async function markSelection(checked) {
   }
 }
 
-function refactorRow(item) {
+// 清单长了就压成默认高度、右下角给个拖柄（CSS 里的 .preview.scrollable），高度随你拖；
+// 矮清单不挂这个类：没东西可拖，白长一个角。
+function fitPreview(list) {
+  // 先按 .preview 的 340px 上限量一眼，量完再加类：加完类上限就变成 85vh 了。
+  const capped = list.clientHeight;
+  if (list.scrollHeight <= capped + 1) return;
+  list.classList.add('scrollable');
+  list.style.height = `${capped}px`;
+}
+
+// 重构面板分两段：点下去先把选中的词全部摆出来（现有义项本地就有，这一段不调模型），跑的
+// 时候哪个词回来就填哪一行、哪条义项定完档就填哪一条——和「重定档位」那边一样，从头到尾
+// 界面上都有东西，而不是攒到整个词跑完才一起出现。
+function refactorSlot(entry) {
   const li = document.createElement('li');
   const pick = document.createElement('input');
   pick.type = 'checkbox';
   pick.className = 'refactor-pick';
-  pick.checked = item.writeable;
-  pick.disabled = !item.writeable;
-  pick.dataset.word = item.word;
+  pick.disabled = true; // 跑完、而且定档完整，才允许勾
 
   const word = document.createElement('strong');
-  word.textContent = item.word;
+  word.textContent = entry.word;
   const move = document.createElement('span');
   move.className = 'def';
-  const before = (item.current.senses || []).map((x) => x.level || '—').join(' / ') || '—';
-  const after = item.senses.map((x) => x.level).join(' / ');
-  move.textContent = `${before} → ${after}`;
-  li.append(pick, word, move);
+  const before = (entry.senses || []).map((s) => s.level || '—').join(' / ') || '—';
+  move.textContent = `${before} → …`;
+  const out = document.createElement('span');
+  out.className = 'save-state';
+  out.textContent = '排队中';
+  li.append(pick, word, move, out);
 
   const senses = document.createElement('div');
   senses.className = 'refactor-senses';
-  for (const sense of item.senses) {
-    const line = document.createElement('div');
-    line.className = 'child';
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    if (sense.level) tag.dataset.level = sense.level;
-    tag.textContent = sense.level ? `#${sense.level}` : '#—';
-    line.append(tag, document.createTextNode(` ${sense.definition}${sense.chinese ? ` · ${sense.chinese}` : ''} — ${sense.example}`));
-    senses.append(line);
-    // 定档依据跟着每条义项走，展开能看到逐步命中与五次投票。
-    senses.append(levelCard({ level: sense.level, vote: sense.vote, trace: sense.trace, error: sense.voteError }));
-  }
-  li.append(senses);
+  const hint = document.createElement('div');
+  hint.className = 'hint';
+  hint.hidden = true;
+  const bad = document.createElement('div');
+  bad.className = 'edit-msg bad';
+  bad.hidden = true;
+  li.append(senses, hint, bad);
 
-  const notes = [];
-  if (item.note) notes.push(item.note);
-  if (notes.length) {
-    const hint = document.createElement('div');
-    hint.className = 'hint';
-    hint.textContent = notes.join(' · ');
-    li.append(hint);
-  }
-  if (!item.writeable) {
-    const bad = document.createElement('div');
-    bad.className = 'edit-msg bad';
-    bad.textContent = `无法写盘：${item.error?.message || item.error?.code || '未知原因'}`;
-    li.append(bad);
-  }
-  return li;
+  const slot = {
+    li,
+    pick,
+    entry,
+    item: null,
+    lines: [],
+    fallbackTrace: null,
+    status(text, isBad = false) {
+      out.textContent = text;
+      out.className = isBad ? 'save-state bad' : 'save-state';
+    },
+    // 义项一到就先摆出来（档位还空着），定完一条就地更新那一条——不攒到整个词跑完。
+    showSenses(list, fallbackTrace) {
+      slot.fallbackTrace = fallbackTrace || null;
+      senses.replaceChildren();
+      slot.lines = list.map((sense) => {
+        const line = document.createElement('div');
+        line.className = 'child';
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        const text = document.createTextNode('');
+        line.append(tag, text);
+        // 定档依据跟着每条义项走，展开能看到逐步命中与几次投票。
+        const card = levelCard({ level: null, trace: sense.trace || slot.fallbackTrace });
+        senses.append(line, card);
+        const node = { line, tag, text, card };
+        slot.paint(node, sense);
+        return node;
+      });
+    },
+    paint(node, sense) {
+      if (sense.level) node.tag.dataset.level = sense.level;
+      else delete node.tag.dataset.level;
+      node.tag.textContent = sense.level ? `#${sense.level}` : '#—';
+      node.text.textContent = ` ${sense.definition}${sense.chinese ? ` · ${sense.chinese}` : ''} — ${sense.example}`;
+      node.card.api.update({
+        level: sense.level,
+        vote: sense.vote,
+        trace: sense.trace || slot.fallbackTrace,
+        error: sense.voteError,
+        note: sense.kept ? '释义没变，沿用原档位' : null,
+      });
+    },
+    updateSense(i, sense) {
+      const node = slot.lines[i];
+      if (node) slot.paint(node, sense);
+    },
+    done(item) {
+      slot.item = item;
+      move.textContent = `${before} → ${item.senses.map((s) => s.level).join(' / ')}`;
+      out.textContent = '';
+      // 已经流出来的那些就地更新，不整块重画（不然用户展开的依据方块会被收回去）。
+      item.senses.forEach((sense, i) => slot.updateSense(i, sense));
+      if (item.note) {
+        hint.textContent = item.note;
+        hint.hidden = false;
+      }
+      if (!item.writeable) {
+        bad.textContent = `无法写盘：${item.error?.message || item.error?.code || '未知原因'}`;
+        bad.hidden = false;
+      }
+      pick.disabled = !item.writeable;
+      pick.checked = Boolean(item.writeable);
+    },
+  };
+  return slot;
 }
 
-function renderRefactorPanel(items, { stopped = false } = {}) {
+function openRefactorPanel(entries) {
   const panel = $('#refactorPanel');
   panel.innerHTML = '';
   panel.hidden = false;
-  if (!items.length) {
-    panel.textContent = stopped
-      ? '上一轮被终止时还没跑完任何一个词，再点一次「重构选中的词」就是了。'
-      : '没有待确认的重构建议。';
-    return;
-  }
+  panelLock = true;
+  syncSelection();
+
   const head = document.createElement('p');
   head.className = 'quiz-hint';
-  head.textContent = `重构建议 ${items.length} 条 · 勾选后一次写盘，写盘前自动备份${
-    stopped ? ' · 上一轮中途终止，这里只是已经跑完的那部分' : ''
-  }`;
   panel.append(head);
 
   const actions = document.createElement('div');
@@ -681,32 +743,63 @@ function renderRefactorPanel(items, { stopped = false } = {}) {
   apply.type = 'button';
   apply.className = 'btn primary';
   apply.textContent = '确认写入';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn ghost';
+  cancel.textContent = '取消';
   const result = document.createElement('span');
   result.className = 'save-state';
-  actions.append(all, none, apply, result);
+  actions.append(all, none, apply, cancel, result);
   panel.append(actions);
+
+  // 「取消」是整块收摊：还在飞的调用一并中止，面板收掉、什么也不写回词表，工具栏那把锁跟着解开。
+  const closePanel = () => {
+    refactorStop?.abort();
+    panel.hidden = true;
+    panel.innerHTML = '';
+    panelLock = false;
+    syncSelection();
+  };
+  cancel.addEventListener('click', () => {
+    closePanel();
+    toast('已取消这一轮重构，未写盘');
+  });
 
   const list = document.createElement('ul');
   list.className = 'preview';
-  for (const item of items) list.append(refactorRow(item));
+  const slots = entries.map((entry) => refactorSlot(entry));
+  for (const slot of slots) list.append(slot.li);
   panel.append(list);
+  fitPreview(list);
+
+  // 开跑前就把这轮的账摆出来：一个词一次生成 + 每条义项三票。
+  const expected = estimate({
+    entries: entries.length,
+    senses: entries.reduce((n, e) => n + (e.senses || []).length, 0),
+  });
+  const say = (extra) => {
+    const ready = slots.filter((s) => s.item).length;
+    head.textContent = `重构建议 ${ready}/${slots.length} 个词 · 预计 ${expected.text} · 勾选后一次写盘，写盘前自动备份${
+      extra ? ` · ${extra}` : ''
+    }`;
+  };
+  say('');
 
   all.addEventListener('click', () => {
-    for (const box of panel.querySelectorAll('.refactor-pick')) if (!box.disabled) box.checked = true;
+    for (const slot of slots) if (!slot.pick.disabled) slot.pick.checked = true;
   });
   none.addEventListener('click', () => {
-    for (const box of panel.querySelectorAll('.refactor-pick')) if (!box.disabled) box.checked = false;
+    for (const slot of slots) slot.pick.checked = false;
   });
+
   apply.addEventListener('click', async () => {
-    const chosen = [...panel.querySelectorAll('.refactor-pick:checked')].map((box) => box.dataset.word);
+    const chosen = slots.filter((s) => s.pick.checked && s.item);
     if (!chosen.length) {
       result.textContent = '没有勾选任何词';
       result.className = 'save-state bad';
       return;
     }
-    const payload = items
-      .filter((item) => chosen.includes(item.word))
-      .map((item) => ({ word: item.word, senses: item.senses, checked: item.checked }));
+    const payload = chosen.map((s) => ({ word: s.item.word, senses: s.item.senses, checked: s.item.checked }));
     apply.disabled = true;
     result.textContent = '写入中…';
     result.className = 'save-state';
@@ -720,18 +813,29 @@ function renderRefactorPanel(items, { stopped = false } = {}) {
       toast(`已重构 ${out.changed} 条${out.backup ? ` · 备份 ${out.backup}` : ''}`);
       selected.clear();
       await loadEntries();
-      renderRefactorPanel(items.filter((item) => !chosen.includes(item.word)));
+      // 写过的那些从清单里摘掉，剩下的继续摆着。
+      for (const slot of chosen) slot.li.remove();
+      slots.splice(0, slots.length, ...slots.filter((s) => !chosen.includes(s)));
+      if (!slots.length) {
+        // 全都写完了就整块收摊：工具栏那把锁跟着解开，好接着跑下一批。
+        closePanel();
+        return;
+      }
+      say('');
     } catch (e) {
       result.textContent = `写入失败：${e.message}`;
       result.className = 'save-state bad';
-      apply.disabled = false;
     }
+    apply.disabled = false;
   });
+
+  return { slots, say };
 }
 
 // 档位复判（任务三）：档位依据没写进 markdown，只有生成那一刻知道，所以能复判的近似判据是
 // 「这个词在参考词表里有没有东西可依」——一点参考都没有的那些义项，当初的档位就是纯 AI 自判。
-// 三次点击：出清单（不调模型）→ 对勾选的义项分块并发跑五次取平均 → 核对后一次写盘。
+// 两步点击：出清单（不调模型）→ 对勾选的义项并发跑三次取平均，最后点「确认写入」一次写盘。
+// 面板一露面就一直摆着，那期间工具栏别的批量按钮都锁着（D41）。
 // 行的样子与「重构」那面板一致（同一套 li/preview 版式），但**不展示例句**：这一版只关心档位。
 function levelRow(item, sense, index) {
   const li = document.createElement('li');
@@ -739,7 +843,7 @@ function levelRow(item, sense, index) {
   pick.type = 'checkbox';
   pick.className = 'refactor-pick';
   pick.disabled = !sense.definition;
-  // 档位现在一律由五票定（D30），所以默认全勾：复判是给旧数据按新口径重算一遍。
+  // 档位现在一律由三票定（D30），所以默认全勾：复判是给旧数据按新口径重算一遍。
   pick.checked = !pick.disabled;
 
   const word = document.createElement('strong');
@@ -771,13 +875,17 @@ function renderLevelPanel(res) {
   const rows = [];
   const total = res.items.reduce((n, item) => n + item.senses.length, 0);
   if (!total) {
+    // 没东西可判：这条只留一句话，不该锁住工具栏（锁了就只能刷新页面才能再点别的）。
     panel.textContent = res.missing.length ? `没有可复判的词（${res.missing.length} 个查不到）` : '没有可复判的义项';
     return;
   }
+  panelLock = true;
+  syncSelection();
 
   const head = document.createElement('p');
   head.className = 'quiz-hint';
-  head.textContent = `档位复判 ${res.items.length} 个词 / ${total} 条义项：默认全勾，每条的档位都重新跑五次投票取平均（带查表命中的参考）；展开每条的依据能看每一步命中了什么。`;
+  const plan = estimate({ senses: total });
+  head.textContent = `档位复判 ${res.items.length} 个词 / ${total} 条义项（每条三票，预计 ${plan.text}）：默认全勾；展开每条的依据能看每一步命中了什么。`;
   panel.append(head);
 
   const actions = document.createElement('div');
@@ -790,32 +898,39 @@ function renderLevelPanel(res) {
   none.type = 'button';
   none.className = 'btn ghost';
   none.textContent = '全不选';
-  const vote = document.createElement('button');
-  vote.type = 'button';
-  vote.className = 'btn';
-  vote.textContent = '开始复判';
+  // 清单摆好就自己开跑（与「重构」一致），不用再点一次；停过之后才露出「继续复判」补没跑到的。
+  // 「取消」是整块收摊：在飞的投票一起中止，面板收掉，什么也不写回词表。
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'btn';
+  more.textContent = '继续复判';
+  more.hidden = true;
   const stop = document.createElement('button');
   stop.type = 'button';
   stop.className = 'btn ghost';
   stop.textContent = '终止';
   stop.hidden = true;
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn ghost';
+  cancel.textContent = '取消';
   const status = document.createElement('span');
   status.className = 'save-state';
-  actions.append(all, none, vote, stop, status);
+  actions.append(all, none, more, stop, cancel, status);
   panel.append(actions);
 
   const list = document.createElement('ul');
   list.className = 'preview';
   for (const item of res.items) {
-    const chapter = document.createElement('li');
+    const group = document.createElement('li');
     const tag = document.createElement('span');
     tag.className = 'tag';
     tag.textContent = item.covered === 0 ? '参考词表未收录' : `有 ${item.covered} 条参考档位`;
     const title = document.createElement('strong');
-    title.textContent = `### ${item.chapter} · ${item.word}`;
-    chapter.append(title, tag);
-    if (item.covered) chapter.append(document.createTextNode(levelSourceLine(item.referenceLevels).join(' · ')));
-    list.append(chapter);
+    title.textContent = item.word;
+    group.append(title, tag);
+    if (item.covered) group.append(document.createTextNode(levelSourceLine(item.referenceLevels).join(' · ')));
+    list.append(group);
     item.senses.forEach((sense, i) => {
       const row = levelRow(item, sense, i);
       rows.push(row.api);
@@ -823,25 +938,20 @@ function renderLevelPanel(res) {
     });
   }
   panel.append(list);
+  fitPreview(list);
 
-  const confirm = document.createElement('input');
-  confirm.type = 'checkbox';
-  const confirmWrap = document.createElement('label');
-  confirmWrap.className = 'row-inline';
-  confirmWrap.append(confirm, document.createTextNode(' 已核对清单，确认写回词表'));
   const commit = document.createElement('button');
   commit.type = 'button';
   commit.className = 'btn primary';
   commit.textContent = '确认写入';
-  commit.disabled = true;
   const done = document.createElement('span');
   done.className = 'save-state';
   const foot = document.createElement('div');
   foot.className = 'row';
-  foot.append(confirmWrap, commit, done);
+  foot.append(commit, done);
   panel.append(foot);
 
-  const chosen = () => rows.filter((r) => r.pick.checked);
+  const chosen = () => rows.filter((r) => r.pick.checked && r.to !== undefined);
   all.addEventListener('click', () => {
     for (const r of rows) if (!r.pick.disabled) r.pick.checked = true;
   });
@@ -849,8 +959,8 @@ function renderLevelPanel(res) {
     for (const r of rows) r.pick.checked = false;
   });
 
-  // 「终止」只关连接：服务端跟着停掉还在跑的那些投票，已经跑完的结果原样留着。
-  // 没跑的那些不记 r.to，所以再点一次（按钮这时写着「继续复判」）就从它们接着跑。
+  // 「终止」只关连接：服务端跟着停掉还在跑的那些投票，已经跑完的结果原样留着；没跑的那些不记
+  // r.to，所以停过之后「继续复判」会露出来，从它们接着跑。
   let controller = null;
   stop.addEventListener('click', () => {
     stop.disabled = true;
@@ -859,84 +969,103 @@ function renderLevelPanel(res) {
     controller?.abort();
   });
 
-  vote.addEventListener('click', async () => {
-    const targets = chosen().filter((r) => r.to === undefined);
-    if (!targets.length) {
-      status.textContent = '没有勾选待复判的义项';
-      status.className = 'save-state bad';
-      return;
-    }
-    vote.disabled = true;
+  // 「取消」是整块收摊：在飞的投票一并中止，面板收掉、什么也不写回词表，工具栏那把锁随之解开。
+  const closePanel = () => {
+    controller?.abort();
+    panel.hidden = true;
+    panel.innerHTML = '';
+    panelLock = false;
+    syncSelection();
+  };
+  cancel.addEventListener('click', () => {
+    closePanel();
+    toast('已取消复判，未写盘');
+  });
+
+  const run = async () => {
+    const targets = rows.filter((r) => r.to === undefined);
+    if (!targets.length) return;
+    more.hidden = true;
     stop.hidden = false;
     stop.disabled = false;
     // 复判投票也算一条批量：跑着的时候工具栏那几个按钮一起锁住。
     batchBusy = true;
     syncSelection();
+    const meter = usageMeter();
+    status.textContent = `正在复判 ${targets.length} 条义项，结果逐条回填（随时可终止）`;
+    status.className = 'save-state';
     controller = new AbortController();
     let ok = 0;
-    // 分块并发（√n 一块）：一次跑完几十条要等太久，全并发又会把上游打爆。
-    const results = await inChunks(
-      targets,
-      async (r) => {
-        try {
-          const res2 = await api('/api/level/vote', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ word: r.item.word, sense: r.index, model: $('#model').value }),
-            signal: controller.signal,
-          });
-          r.to = res2.level;
-          r.card.api.update({ level: res2.level, vote: res2, trace: res2.trace });
-          r.move.textContent = `${r.level ? `#${r.level} → ` : ''}#${res2.level}`;
-          r.out.textContent = `${res2.agree}/${res2.valid} 票一致${res2.valid < 5 ? `（${5 - res2.valid} 票空）` : ''}`;
-          if (res2.from !== res2.level) ok += 1;
-        } catch (e) {
-          // 被终止的那几条不算失败：它们只是还没跑，重开一轮就会补上。
-          const cut = e.name === 'AbortError' || e.aborted;
-          r.out.textContent = cut ? '已终止，还没跑' : `复判失败：${e.message}`;
-          r.out.className = cut ? 'save-state' : 'save-state bad';
-        }
-      },
-      (n, total) => {
-        status.textContent = `复判中 ${n}/${total}…`;
-        status.className = 'save-state';
-      },
-      controller.signal,
-    );
-    controller = null;
-    stop.hidden = true;
-    vote.disabled = false;
-    batchBusy = false;
-    syncSelection();
-    const stopped = results.some((r) => r.aborted);
+    let stopped = false;
+    // 收尾放在 finally：中间出什么事，这把锁与用量表都得放掉——它俩只在这一条路上复位。
+    try {
+      // 分块并发（√n 一块）：一次跑完几十条要等太久，全并发又会把上游打爆。
+      // 一批 8 条一起问（D37）：固定那份规则只摊一次，比逐条问省得多。
+      await voteAll(
+        targets.map((r) => ({ r, target: { word: r.item.word, sense: r.index } })),
+        {
+          model: $('#model').value,
+          signal: controller.signal,
+          onRow: ({ r }, res2, error) => {
+            const cut = controller.signal.aborted;
+            if (!res2 || !res2.level) {
+              // 被终止的那几条不算失败：它们只是还没跑，接着跑一轮就会补上。
+              r.out.textContent = cut ? '已终止，还没跑' : `复判失败：${error ? error.message : '这条没定出档位'}`;
+              r.out.className = cut ? 'save-state' : 'save-state bad';
+              return;
+            }
+            r.to = res2.level;
+            r.card.api.update({ level: res2.level, vote: res2, trace: res2.trace });
+            r.move.textContent = `${r.level ? `#${r.level} → ` : ''}#${res2.level}`;
+            r.out.textContent = `${res2.agree}/${res2.valid} 票一致${
+              res2.votes.length > res2.valid ? `（${res2.votes.length - res2.valid} 票空）` : ''
+            }`;
+            if (res2.from !== res2.level) ok += 1;
+          },
+          onProgress: (n, total) => {
+            status.textContent = `复判中 ${n}/${total}…${meter.text()}`;
+            status.className = 'save-state';
+          },
+        },
+      );
+      stopped = controller.signal.aborted;
+    } finally {
+      meter.stop();
+      controller = null;
+      stop.hidden = true;
+      batchBusy = false;
+      syncSelection();
+    }
     const left = targets.filter((r) => r.to === undefined).length;
     for (const r of targets) {
       if (r.to === undefined && !r.out.textContent) r.out.textContent = stopped ? '已终止，还没跑' : '没跑成';
     }
     done.textContent = '';
-    vote.textContent = left ? '继续复判' : '开始复判';
     if (!left) {
       status.textContent = `复判完成 · ${ok} 条档位会变`;
       status.className = 'save-state';
-    } else if (stopped) {
-      status.textContent = `已终止 · 跑完 ${targets.length - left}/${targets.length}，还剩 ${left} 条`;
-      status.className = 'save-state';
     } else {
-      status.textContent = `有 ${left} 条没跑成 · 再点一次重试`;
-      status.className = 'save-state bad';
+      more.hidden = false;
+      status.textContent = stopped
+        ? `已终止 · 跑完 ${targets.length - left}/${targets.length}，还剩 ${left} 条`
+        : `有 ${left} 条没跑成 · 再点一次重试`;
+      status.className = stopped ? 'save-state' : 'save-state bad';
     }
-  });
-
-  confirm.addEventListener('change', () => {
-    commit.disabled = !confirm.checked;
-  });
+  };
+  more.addEventListener('click', () => run());
 
   commit.addEventListener('click', async () => {
-    // 写回只改档位：其余字段照抄清单里的现状，一次写盘一份备份。
+    // 写回只改档位，而且只改**勾上的**那些（勾选框管的是写不写回去，不是跑不跑）：其余字段照抄
+    // 清单里的现状，一次写盘一份备份。
+    const picked = chosen();
+    if (!picked.length) {
+      done.textContent = '没有勾选任何有结果的义项';
+      done.className = 'save-state bad';
+      return;
+    }
     const byWord = new Map();
     const changedWords = new Set();
-    for (const r of rows) {
-      if (r.to === undefined) continue;
+    for (const r of picked) {
       if (!byWord.has(r.item.word)) {
         byWord.set(r.item.word, {
           word: r.item.word,
@@ -969,55 +1098,84 @@ function renderLevelPanel(res) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ items }),
       });
-      done.textContent = `已写回 ${out.changed} 个词${out.failed.length ? ` · 跳过 ${out.failed.length}` : ''}${out.backup ? ` · 备份 ${out.backup}` : ''}`;
       toast(`档位已重定 ${out.changed} 个词${out.backup ? ` · 备份 ${out.backup}` : ''}`);
       selected.clear();
       await loadEntries();
+      if (!out.failed.length) {
+        // 写完了就整块收摊：工具栏那把锁跟着解开，好接着跑下一批。
+        closePanel();
+        return;
+      }
+      done.textContent = `已写回 ${out.changed} 个词 · 跳过 ${out.failed.length}`;
+      done.className = 'save-state bad';
     } catch (e) {
-      commit.disabled = false;
       done.textContent = `写入失败：${e.message}`;
       done.className = 'save-state bad';
     }
+    // 还有没写成的：面板留着，按钮放行，好让你改完再写一次。
+    commit.disabled = false;
   });
+
+  // 摆好就开跑。
+  run();
 }
 
-// 重构出的义项也要定档（D30）：模型只写释义与例句，档位逐条跑五次投票，带上参考档位。
-// 条目内分块并发（√n 一块）；定不出档位的那条留「待定」，并把这个词标成写不进。
-async function withLevels(item, onStep, signal) {
+// 重构出的义项也要定档（D30）：模型只写释义与例句，档位逐条跑三次投票，带上参考档位。
+// 义项内并发（√n）；定不出档位的那条留「待定」，并把这个词标成写不进。
+// onSense(i, sense) 每定完一条就叫一次，调用方据此把那一条就地画出来（别攒到最后）。
+async function withLevels(item, { onSense, onStep } = {}, signal) {
   const model = $('#model').value;
-  const results = await inChunks(
-    item.senses,
-    async (sense) => {
-      try {
-        const out = await levelVote({
-          word: item.word,
-          definition: sense.definition,
-          example: sense.example,
-          model,
-        }, signal);
-        sense.level = out.level;
-        sense.vote = out;
-        sense.trace = out.trace;
-      } catch (e) {
-        sense.level = null;
-        sense.vote = null;
-        // 中止时 fetch 抛的是浏览器自己那句「signal is aborted without reason」，别原样端给用户。
-        sense.voteError = signal?.aborted ? '已终止，还没定档' : e.message;
-      }
+  // 释义跟表里一模一样的义项不重投票：档位是对着这条释义定的，释义没变、档位就不该变。
+  // 实测（5 个词 13 条义项）85% 原样回来——这一条把重构那半边的定档开销砍掉八成多。
+  const kept = item.senses.map((sense, i) => {
+    const before = (item.current && item.current.senses && item.current.senses[i]) || null;
+    return Boolean(before && before.level && before.definition && before.definition.trim() === (sense.definition || '').trim());
+  });
+  item.senses.forEach((sense, i) => {
+    if (!kept[i]) return;
+    sense.level = item.current.senses[i].level;
+    sense.vote = null;
+    sense.kept = true;
+    if (onSense) onSense(i, sense);
+  });
+  // 剩下那些摆在一批里问（多数词 1–3 条，一趟就问完）。
+  await voteAll(
+    item.senses
+      .map((sense, i) => ({
+        i,
+        sense,
+        target: { word: item.word, definition: sense.definition, example: sense.example },
+      }))
+      .filter(({ i }) => !kept[i]),
+    {
+      model,
+      signal,
+      onRow: ({ i, sense }, out, error) => {
+        if (out && out.level) {
+          sense.level = out.level;
+          sense.vote = out;
+          sense.trace = out.trace;
+        } else {
+          sense.level = null;
+          sense.vote = null;
+          // 没定出档位：把原因留下（中止时别把浏览器那句原样端给用户）。
+          sense.voteError = error
+            ? signal?.aborted
+              ? '已终止，还没定档'
+              : error.message
+            : '这条没给出合法档位';
+        }
+        if (onSense) onSense(i, sense);
+      },
+      onProgress: (done, total) => onStep && onStep(done, total),
     },
-    (done, total) => onStep && onStep(done, total),
-    signal,
   );
-  // 没轮到的那些义项一条票都没投（catch 都没进），别让下面把「五票无效」当成结论写出去。
-  for (let i = 0; i < results.length; i += 1) {
-    if (results[i].aborted && !item.senses[i].level) item.senses[i].voteError = '已终止，还没定档';
-  }
   const missing = item.senses.findIndex((s) => !s.level);
   if (missing >= 0) {
     return {
       ...item,
       writeable: false,
-      error: { code: 'noLevel', message: `第 ${missing + 1} 条义项没定出档位：${item.senses[missing].voteError || '五票无效'}` },
+      error: { code: 'noLevel', message: `第 ${missing + 1} 条义项没定出档位：${item.senses[missing].voteError || '没定出档位'}` },
     };
   }
   // 定完档就按新档位重探一次写盘：服务端那份探测是拿占位档位做的，这里才是最终结论。
@@ -1029,6 +1187,9 @@ async function withLevels(item, onStep, signal) {
 let refactorStop = null;
 // 有没有一条批量在跑（重构或复判投票）。批量按钮的可用状态按它算。
 let batchBusy = false;
+// 重构 / 复判的清单面板都是单例，而且露面之后就一直摆在那儿（除非刷新页面）：摆着的时候
+// 不许再起任何别的批量操作——再跑一轮会把自己那一格的面板重画一遍，上一轮的结果就没了。
+let panelLock = false;
 
 async function refactorSelection() {
   const words = [...selected];
@@ -1039,47 +1200,88 @@ async function refactorSelection() {
   syncSelection();
   stop.hidden = false;
   stop.disabled = false;
-  const controller = new AbortController();
-  refactorStop = controller;
-  const results = await inChunks(
-    words,
-    async (word) => {
-      const proposal = await api('/api/refactor', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ word, model: $('#model').value }),
-        signal: controller.signal,
-      });
-      // 信号一路传进定档：一个词内部那几条义项也一起停，不留半截在跑。
-      return withLevels(proposal, null, controller.signal);
-    },
-    (n, total) => {
-      out.textContent = `重构并定档 ${n}/${total}…`;
-    },
-    controller.signal,
-  );
-  refactorStop = null;
-  batchBusy = false;
-  stop.hidden = true;
-  stop.disabled = false;
-  syncSelection();
-  // 被终止的那些不算失败，别拿它们刷红条：连着的请求本来就是我们自己掐的。
-  for (const r of results) {
-    if (!r.ok && !r.aborted) toast(`${r.item} 重构失败：${r.error.message}`, 'bad');
+  // 用量表在 try **外面**声明：finally 是另一层作用域，看不见 try 里 const 出来的东西。这里踩过——
+  // `meter.stop()` 一抛 ReferenceError，finally 后面的解锁就全不执行了，按钮一直灰到刷新页面。
+  let meter = null;
+  // 整段包在 try 里：中间任何一处抛（建面板、发请求、收尾），那几个按钮都必须解锁，
+  // 不能就这么锁死到刷新页面为止。
+  try {
+    // 先把清单摆出来：这一步只读本地数据，不调模型，所以点下去立刻能看到 N 行。
+    const panel = openRefactorPanel(
+      words.map((word) => state.entries.find((e) => e.word === word) || { word, senses: [] }),
+    );
+    const slotOf = new Map(panel.slots.map((slot) => [slot.entry.word, slot]));
+    meter = usageMeter();
+    out.textContent = `正在重构 ${words.length} 个词（随时可终止）`;
+    const controller = new AbortController();
+    refactorStop = controller;
+    const results = await inChunks(
+      words,
+      async (word) => {
+        const slot = slotOf.get(word);
+        slot.status('生成中…');
+        const proposal = await api('/api/refactor', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ word, model: $('#model').value }),
+          signal: controller.signal,
+        });
+        // 义项一回来就先摆出来（档位待定、查表命中已经有），随后每定完一条就地更新那一条。
+        slot.showSenses(proposal.senses, proposal.trace);
+        slot.status('定档中…');
+        // 信号一路传进定档：一个词内部那几条义项也一起停，不留半截在跑。
+        return withLevels(
+          proposal,
+          {
+            onSense: (i, sense) => slot.updateSense(i, sense),
+            onStep: (done, total) => slot.status(total > 1 ? `定档中 ${done}/${total}…` : '定档中…'),
+          },
+          controller.signal,
+        );
+      },
+      (n, total) => {
+        out.textContent = `重构并定档 ${n}/${total}…${meter.text()}`;
+      },
+      controller.signal,
+    );
+    const stopped = results.some((r) => r.aborted);
+    const failed = new Set();
+    for (const r of results) {
+      if (r.ok) {
+        slotOf.get(r.item).done(r.value);
+        continue;
+      }
+      // 被终止的那些不算失败，别拿它们刷红条：连着的请求本来就是我们自己掐的。
+      if (r.aborted) continue;
+      failed.add(r.item);
+      slotOf.get(r.item).status(`重构失败：${r.error.message}`, true);
+      toast(`${r.item} 重构失败：${r.error.message}`, 'bad');
+    }
+    // 没跑到的行要说清是为什么，别让它们一直挂着「排队中」。
+    for (const slot of panel.slots) {
+      if (slot.item || failed.has(slot.entry.word)) continue;
+      slot.status(stopped ? '已终止，还没跑' : '没跑成');
+    }
+    const ready = results.filter((r) => r.ok).length;
+    panel.say(stopped ? '上一轮中途终止' : '');
+    out.textContent = `${
+      stopped
+        ? `已终止 · 跑完 ${ready}/${words.length} 个词`
+        : ready
+          ? `本轮完成 ${ready}/${words.length}`
+          : '没有拿到任何建议'
+    }${meter.text()}`;
+  } catch (e) {
+    out.textContent = `重构失败：${e.message}`;
+    toast(`重构失败：${e.message}`, 'bad');
+  } finally {
+    meter?.stop();
+    refactorStop = null;
+    batchBusy = false;
+    stop.hidden = true;
+    stop.disabled = false;
+    syncSelection();
   }
-  const items = results.filter((r) => r.ok).map((r) => r.value);
-  const stopped = results.some((r) => r.aborted);
-  // 被终止时正在定档的那几个词会带着「还没定档」回来：留着只会多出一行写不进去的红字，
-  // 重跑一次本来就得把它们整个重做，所以只留下定档完整的那些。
-  const shown = stopped ? items.filter((item) => item.writeable) : items;
-  out.textContent = stopped
-    ? `已终止 · 跑完 ${shown.length}/${words.length} 个词`
-    : items.length
-      ? `本轮完成 ${items.length}/${words.length}`
-      : '没有拿到任何建议';
-  // 哪怕一个词都没跑成也要画：不画的话上一轮那份清单会留在页面上，点「确认写入」写出去的是
-  // 过期的东西。
-  renderRefactorPanel(shown, { stopped });
 }
 
 async function levelPlan() {
@@ -1100,7 +1302,8 @@ async function levelPlan() {
   } catch (e) {
     out.textContent = `读取失败：${e.message}`;
   } finally {
-    btn.disabled = false;
+    // 别在这里直接点亮：清单已经摆出来了，这个按钮得跟着 panelLock 一起关着。
+    syncSelection();
   }
 }
 

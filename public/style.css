@@ -534,19 +534,6 @@ button:disabled {
   text-align: center;
 }
 
-.count-field .count {
-  font-variant-numeric: tabular-nums;
-}
-
-.count-field .count b {
-  font-weight: 500;
-}
-
-.count-field .pool-note {
-  font-style: normal;
-  color: var(--fg-muted);
-}
-
 .toolbar + .list,
 .toolbar + .actionbar {
   margin-top: 10px;
@@ -1034,6 +1021,14 @@ button:disabled {
   font-size: 13px;
 }
 
+/* 长清单（重构 / 复判那种几十行的）压到默认高度之后，右下角给一个拖柄，高度随你调，
+   上限 85vh。矮清单不加这个类——没东西可拖，白长一个角。 */
+.preview.scrollable {
+  resize: vertical;
+  min-height: 6em;
+  max-height: 85vh;
+}
+
 .preview > li,
 .preview > div {
   display: flex;
@@ -1390,11 +1385,6 @@ button:disabled {
   }
 
   .topbar h1 {
-    display: none;
-  }
-
-  /* 抽词那格现在最长：数字框已经显示着抽几个，把右边那截文字整个让出去 */
-  .count-field .count {
     display: none;
   }
 }
