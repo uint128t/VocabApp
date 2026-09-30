@@ -16,7 +16,7 @@ import {
 } from './vocab.js';
 import { createStore, createStateFile } from './store.js';
 import { createSession } from './session.js';
-import { createAi, defaultPrompts, CONTRACTS } from './ai.js';
+import { createAi, CONTRACTS } from './ai.js';
 import { createSettings, DEFAULTS, modelEndpoints } from './settings.js';
 import { createCefr, CEFR_LEVELS } from './cefr.js';
 import { loadConfig } from './config.js';
@@ -28,8 +28,9 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
 };
 const BODY_LIMIT = 1_000_000;
-// 档位复判（任务三）一轮问几次：五次取平均，票数少了平均没意义。
-const LEVEL_VOTES = 5;
+// 档位复判一轮问几次：并行问三次取平均。多问几次只是压单次判断的偶然性，三次够用，
+// 而且一条义项每多一票就是多一次调用（全表 800 多条义项，五票比三票多两千次）。
+const LEVEL_VOTES = 3;
 const AI_STATUS = { aiConfig: 503, aiHttp: 502, aiNetwork: 502, aiEmpty: 502, aiJson: 502, aiShape: 502 };
 const PLAN_STATUS = {
   wordExists: 409,
@@ -261,7 +262,6 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           settings: s,
           settingsError: error,
           defaults: DEFAULTS,
-          promptDefaults: defaultPrompts(),
           contracts: { entry: CONTRACTS.entry, judge: CONTRACTS.judge },
           models: modelList(),
           keyNames: config.keyNames ?? [],
@@ -276,6 +276,9 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     },
 
     '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
+
+    // 进程启动以来的模型用量：一次批量跑几千次调用，前端拿两次读数相减就知道这轮花了多少。
+    '/api/usage': () => ({ status: 200, body: { usage: ai ? ai.usage() : { calls: 0, prompt: 0, completion: 0, reasoning: 0 } } }),
 
     '/api/session': () => {
       if (!sessionRunner) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
@@ -305,30 +308,13 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     }
   }
 
-  // 五次并行定档：串行要等五个来回，并行只等一个；问不出来（网络、坏 JSON、非法档位）的
-  // 那些票记空票，不因为一张票废掉整条义项。参考档位一并交给模型，采信与否由它自己判断。
-  async function voteLevel({ word, definition, example, referenceLevels, model }, signal) {
-    const settled = await Promise.allSettled(
-      Array.from({ length: LEVEL_VOTES }, () =>
-        ai.levelVote({ word, definition, example, referenceLevels }, { model, signal }),
-      ),
-    );
-    const votes = settled.map((r) => (r.status === 'fulfilled' ? r.value.level : null));
-    // 只认 CEFR 六档的票：网络失败、坏 JSON、模型报了别的档位都算空票，不进平均。
+  // 一票怎么算：只认 CEFR 六档（网络失败、坏 JSON、模型报了别的档位都算空票），
+  // 六档折 0–5 取平均再四舍五入回档，`.5` 向上（偏向更难的那一档）。
+  function tally(votes) {
     const valid = votes.filter((v) => CEFR_LEVELS.includes(v));
-    if (!valid.length) {
-      // 一张票都没成：把真实的失败原因端上去（没配模型就是 503、上游抽风就是 502），
-      // 别让它埋在一句「没定出档位」后面。
-      const first = settled.find((r) => r.status === 'rejected');
-      throw httpError(
-        AI_STATUS[first?.reason?.code] || 502,
-        first?.reason?.code || 'noLevelVotes',
-        first?.reason?.message || `五次都没给出合法档位：${JSON.stringify(votes)}`,
-      );
-    }
+    if (!valid.length) return { level: null, votes, valid: 0, agree: 0, mean: null };
     const numbers = valid.map((v) => CEFR_LEVELS.indexOf(v));
     const mean = numbers.reduce((a, b) => a + b, 0) / numbers.length;
-    // 平均后再四舍五入回档；.5 向上（偏向更难的那一档），并列时有记录可查。
     const level = CEFR_LEVELS[Math.min(CEFR_LEVELS.length - 1, Math.max(0, Math.round(mean)))];
     return {
       level,
@@ -339,6 +325,24 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     };
   }
 
+  // 一批义项一起定档：LEVEL_VOTES 遍并行，每遍都是同一批（一遍里每条各得一票）。
+  // 好处是固定的那份规则与说明只摊一次；代价是一遍里出一条坏数据会连累同批的其他条目，
+  // 所以前端按固定条数分批、坏的那个再回队列等下一批（D37）。
+  async function voteLevelBatch(items, model, signal) {
+    const rounds = await Promise.all(
+      Array.from({ length: LEVEL_VOTES }, () =>
+        ai.levelVoteBatch(items, { model, signal }).then(
+          (r) => r.levels,
+          (e) => ({ error: e }),
+        ),
+      ),
+    );
+    // 三遍全挂（没配模型、上游连不上）：把真实的失败端上去，别让它埋进每条的「没定出档位」。
+    const dead = rounds.filter((r) => !Array.isArray(r));
+    if (dead.length === rounds.length) throw upstreamError(dead[0].error);
+    return items.map((_, i) => tally(rounds.map((r) => (Array.isArray(r) ? r[i] : null))));
+  }
+
   const postRoutes = {
     '/api/draft': async (req) => {
       if (!ai) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
@@ -346,7 +350,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       const word = readWord(body);
       try {
         const d = await ai.sensesEntry(
-          { word, current: null, referenceLevels: grades.describe(word), withChinese: body.withChinese === true },
+          { word, current: null, withChinese: body.withChinese === true },
           { model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : currentSettings().model },
         );
         return {
@@ -355,7 +359,6 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
             word,
             senses: d.senses,
             note: d.note,
-            referenceLevels: grades.describe(word),
             trace: grades.trace(word),
           },
         };
@@ -598,11 +601,10 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         })),
         rawLines: [entry.raw, ...entry.childLines],
       };
-      const referenceLevels = grades.describe(word);
       let proposal;
       try {
         proposal = await ai.sensesEntry(
-          { word, current, referenceLevels, withChinese: entry.senses.some((s) => s.chinese) },
+          { word, current, withChinese: entry.senses.some((s) => s.chinese) },
           { model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : currentSettings().model, signal },
         );
       } catch (e) {
@@ -629,7 +631,6 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           senses,
           checked,
           note: proposal.note,
-          referenceLevels,
           trace: grades.trace(word),
           writeable: !plan.error,
           error: plan.error || null,
@@ -644,7 +645,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       return commitEntries(store, items);
     },
 
-    // 任务三：档位复判。plan 只出清单不调模型；vote 给一条义项跑五次取平均；commit 一次写盘。
+    // 任务三：档位复判。plan 只出清单不调模型；vote 给一条义项跑三次取平均；commit 一次写盘。
     '/api/level/plan': async (req) => {
       const body = await readJson(req);
       const words = Array.isArray(body.words) ? body.words : [];
@@ -682,40 +683,61 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       return { status: 200, body: { items, missing } };
     },
 
-    // 定档：给一条义项跑五次取平均（D28 起是唯一的定档路径，D30 起也是草稿与重构的定档路径）。
-    // 两种目标：词表里已有的按 sense 序号取；草稿卡里刚生成、还没写进词表的直接给 definition。
+    // 定档：一次判一批义项，每条跑三次取平均（D28 起是唯一的定档路径，D30 起也是草稿与重构
+    // 的定档路径，D37 起一次带多条）。每个目标两种形态：给了 definition 就是还没写进词表的
+    // 那一条（草稿卡、重构预览），否则按 sense 序号取词表里的那条。
     '/api/level/vote': async (req, _url, signal) => {
       if (!ai) throw httpError(503, 'aiUnavailable', '服务端未配置模型');
       const body = await readJson(req);
-      const word = readWord(body);
+      const targets = Array.isArray(body.targets) ? body.targets : [];
+      if (!targets.length) throw httpError(400, 'badTargets', 'targets 必须是非空数组');
       const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : currentSettings().model;
-      const referenceLevels = grades.describe(word);
-      const trace = grades.trace(word);
-      const definition = typeof body.definition === 'string' ? body.definition.trim() : '';
-      if (definition) {
-        const out = await voteLevel({
+      // 词表只读一次：一批里可能有十几个词，逐条 readEntries 会把整张表反复解析。
+      const entries = readEntries(store).entries;
+      const items = targets.map((raw) => {
+        const word = readWord(raw);
+        const definition = typeof raw?.definition === 'string' ? raw.definition.trim() : '';
+        const referenceLevels = grades.describe(word);
+        const trace = grades.trace(word);
+        if (definition) {
+          return {
+            word,
+            sense: null,
+            from: null,
+            trace,
+            referenceLevels,
+            ask: { word, definition, example: typeof raw.example === 'string' ? raw.example.trim() : '', referenceLevels },
+          };
+        }
+        const entry = entries.find((e) => e.word === word);
+        if (!entry) throw httpError(404, 'wordNotFound', `未找到词头：${word}`);
+        const index = raw.sense === undefined ? 0 : raw.sense;
+        if (!Number.isInteger(index) || index < 0) throw httpError(400, 'badSense', 'sense 必须是非负整数');
+        const sense = senseList(entry)[index];
+        if (!sense) throw httpError(400, 'badSense', `义项序号超出范围：${index}`);
+        return {
           word,
-          definition,
-          example: typeof body.example === 'string' ? body.example.trim() : '',
+          sense: index,
+          from: sense.level,
+          trace,
           referenceLevels,
-          model,
-        }, signal);
-        return { status: 200, body: { word, sense: null, from: null, referenceLevels, trace, ...out } };
-      }
-      const entry = readEntries(store).entries.find((e) => e.word === word);
-      if (!entry) throw httpError(404, 'wordNotFound', `未找到词头：${word}`);
-      const index = body.sense === undefined ? 0 : body.sense;
-      if (!Number.isInteger(index) || index < 0) throw httpError(400, 'badSense', 'sense 必须是非负整数');
-      const sense = senseList(entry)[index];
-      if (!sense) throw httpError(400, 'badSense', `义项序号超出范围：${index}`);
-      const out = await voteLevel({
-        word,
-        definition: sense.definition || entry.definition,
-        example: sense.example,
-        referenceLevels,
-        model,
-      }, signal);
-      return { status: 200, body: { word, sense: index, from: sense.level, referenceLevels, trace, ...out } };
+          ask: { word, definition: sense.definition || entry.definition, example: sense.example, referenceLevels },
+        };
+      });
+      const out = await voteLevelBatch(items.map((it) => it.ask), model, signal);
+      return {
+        status: 200,
+        body: {
+          results: items.map((it, i) => ({
+            word: it.word,
+            sense: it.sense,
+            from: it.from,
+            trace: it.trace,
+            referenceLevels: it.referenceLevels,
+            ...out[i],
+          })),
+        },
+      };
     },
 
     '/api/level/commit': async (req) => {

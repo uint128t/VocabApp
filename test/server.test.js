@@ -244,15 +244,21 @@ function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: 
       if (throwError) throw throwError;
       return verdict;
     },
-    async levelVote(input, opts) {
-      levelVotes.push({ input, opts });
+    // 一次判一批：票按传入顺序从队列里取（一批几条就取几条），取完了用最后一票兜底。
+    async levelVoteBatch(items, opts) {
+      const batch = items.map((input) => ({ input, opts }));
+      levelVotes.push(...batch);
       if (throwError) throw throwError;
-      if (queue.length) {
-        const next = queue.shift();
-        if (next instanceof Error) throw next;
-        return { level: next };
-      }
-      return { level: votes.length ? votes[votes.length - 1] : 'B1' };
+      return {
+        levels: items.map(() => {
+          if (queue.length) {
+            const next = queue.shift();
+            if (next instanceof Error) throw next;
+            return next;
+          }
+          return votes.length ? votes[votes.length - 1] : 'B1';
+        }),
+      };
     },
     async exampleEntry(word, definition, opts) {
       examples.push({ word, definition, opts });
@@ -285,19 +291,18 @@ test('POST /api/draft returns the senses from the shared entry core', async () =
   const { base } = await start(SORT_FIXTURE, { ai });
   const res = await post(base, '/api/draft', { word: 'attic', withChinese: true, model: 'qwen-max' });
   assert.equal(res.status, 200);
-  // 档位留空：草稿只交释义与例句，档位随后由五次投票来定（D30）。
+  // 档位留空：草稿只交释义与例句，档位随后由三次投票来定（D30）。
   assert.deepEqual(res.body.senses, [
     { level: null, definition: 'sense of attic', chinese: '释义', example: 'A fresh sentence for attic.' },
   ]);
   assert.ok(res.body.trace, '逐步查表记录要随草稿一起给前端');
   assert.equal(res.body.note, '补齐了义项');
   assert.equal(res.body.word, 'attic');
-  assert.ok(Array.isArray(res.body.referenceLevels.levels));
 
   const sent = ai.seen[0];
   assert.equal(sent.input.current, null, '草稿没有现存内容');
   assert.equal(sent.input.withChinese, true);
-  assert.ok(sent.input.referenceLevels, '参考档位必须随请求一起给模型');
+  assert.ok(!('referenceLevels' in sent.input), '补齐不带参考档位（那是指给投票的）');
   assert.deepEqual(sent.opts, { model: 'qwen-max' });
 });
 
@@ -536,7 +541,7 @@ test('POST /api/set-checked reverts the box and touches nothing else', async () 
 
 
 
-test('GET /api/settings returns defaults, prompt defaults and contracts without the key', async () => {
+test('GET /api/settings returns defaults and contracts without the key', async () => {
   const { base } = await start(SORT_FIXTURE, { ai: fakeAi() });
   const res = await fetch(`${base}/api/settings`);
   const text = await res.text();
@@ -544,8 +549,6 @@ test('GET /api/settings returns defaults, prompt defaults and contracts without 
   const body = JSON.parse(text);
   assert.equal(body.settings.theme, 'auto');
   assert.equal(body.settings.lang, 'zh');
-  assert.match(body.promptDefaults.entry, /referenceLevels/);
-  assert.equal(body.promptDefaults.draft, undefined);
   assert.match(body.contracts.judge, /^Output ONLY a JSON object/);
   assert.match(body.contracts.entry, /definition, chinese, example/);
   assert.ok(!/levelBasis/.test(body.contracts.entry), '档位不由模型输出');
@@ -1156,8 +1159,7 @@ test('POST /api/refactor sends the current entry and the reference levels, and r
     { level: 'B1', definition: 'take in', chinese: null, example: 'Plants absorb water.' },
   ]);
   assert.equal(sent.current.headDefinition, 'take in');
-  assert.equal(sent.referenceLevels.word, 'absorb');
-  assert.ok(Array.isArray(sent.referenceLevels.levels), '参考档位必须随请求一起给模型');
+  assert.ok(!('referenceLevels' in sent), '补齐不带参考档位（那是指给投票的）');
 });
 
 test('词头带方括号在入口就被挡下（写进去整张表就解析不出来了）', async () => {
@@ -1306,57 +1308,61 @@ test('POST /api/level/plan lists senses and marks which words the reference list
   assert.equal((await post(base, '/api/level/plan', { words: [''] })).status, 400);
 });
 
-test('POST /api/level/vote asks five times and averages the levels back to a band', async () => {
-  const ai = fakeAi({ votes: ['C1', 'C1', 'B2', 'C1', 'C1'] });
+test('POST /api/level/vote asks three times and averages the levels back to a band', async () => {
+  const ai = fakeAi({ votes: ['C1', 'C1', 'B2'] });
   const { base } = await start(CEFR_FIXTURE, { ai });
-  const res = await post(base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  const res = await post(base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 0 }] });
   assert.equal(res.status, 200);
-  const { referenceLevels, trace, ...rest } = res.body;
+  const { referenceLevels, trace, ...rest } = res.body.results[0];
   assert.deepEqual(rest, {
     word: 'absorb',
     sense: 0,
     from: 'B1',
     level: 'C1',
-    votes: ['C1', 'C1', 'B2', 'C1', 'C1'],
-    valid: 5,
-    agree: 4,
-    mean: 3.8,
+    votes: ['C1', 'C1', 'B2'],
+    valid: 3,
+    agree: 2,
+    mean: 3.67,
   });
-  assert.ok(res.body.referenceLevels.levels.length, '参考档位要一起回去');
-  assert.ok(res.body.trace.tiers.length, '逐步命中要一起回去');
-  assert.equal(ai.levelVotes.length, 5);
+  assert.ok(res.body.results[0].referenceLevels.levels.length, '参考档位要一起回去');
+  assert.ok(res.body.results[0].trace.tiers.length, '逐步命中要一起回去');
+  // 三遍并行，每遍一批（这里一批只有一条），所以是 3 次调用。
+  assert.equal(ai.levelVotes.length, 3);
   assert.equal(ai.levelVotes[0].input.word, 'absorb');
   assert.equal(ai.levelVotes[0].input.definition, 'take in');
   assert.equal(ai.levelVotes[0].input.example, 'Plants absorb water.');
   assert.ok(ai.levelVotes[0].input.referenceLevels, '投票也要带上参考档位（D30）');
   assert.equal(ai.levelVotes[0].opts.model, null);
 
-  const majority = fakeAi({ votes: ['B2', 'B2', 'B2', 'A2', 'B2'] });
+  const majority = fakeAi({ votes: ['B2', 'B2', 'B1'] });
   const two = await start(CEFR_FIXTURE, { ai: majority });
-  const band = await post(two.base, '/api/level/vote', { word: 'absorb', sense: 0 });
-  assert.deepEqual({ level: band.body.level, mean: band.body.mean, agree: band.body.agree }, { level: 'B2', mean: 2.6, agree: 4 });
+  const band = await post(two.base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 0 }] });
+  const one = band.body.results[0];
+  assert.deepEqual({ level: one.level, mean: one.mean, agree: one.agree }, { level: 'B2', mean: 2.67, agree: 2 });
 });
 
-test('POST /api/level/vote drops invalid votes, keeps a spare of five, and reports no votes at all', async () => {
-  const partial = fakeAi({ votes: ['B2', 'B2', 'XXXX', 'C1', 'B2'] });
+test('POST /api/level/vote drops invalid votes and reports no votes at all', async () => {
+  const partial = fakeAi({ votes: ['B2', 'B2', 'XXXX'] });
   const { base } = await start(CEFR_FIXTURE, { ai: partial });
-  const res = await post(base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  const res = await post(base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 0 }] });
   assert.equal(res.status, 200);
-  assert.deepEqual({ level: res.body.level, valid: res.body.valid, agree: res.body.agree, mean: res.body.mean }, { level: 'B2', valid: 4, agree: 3, mean: 3.25 });
+  const only = res.body.results[0];
+  assert.deepEqual({ level: only.level, valid: only.valid, agree: only.agree, mean: only.mean }, { level: 'B2', valid: 2, agree: 2, mean: 3 });
 
   // 票数只剩两张时平均会落在半档上，四舍五入向上（偏难的那一侧）。
-  const tie = fakeAi({ votes: ['B2', 'A1', 'XXXX', 'XXXX', 'XXXX'] });
+  const tie = fakeAi({ votes: ['B2', 'A1', 'XXXX'] });
   const tied = await start(CEFR_FIXTURE, { ai: tie });
-  const out = await post(tied.base, '/api/level/vote', { word: 'absorb', sense: 0 });
-  assert.equal(out.body.valid, 2);
-  assert.equal(out.body.mean, 1.5);
-  assert.equal(out.body.level, 'B1');
+  const out = (await post(tied.base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 0 }] })).body.results[0];
+  assert.equal(out.valid, 2);
+  assert.equal(out.mean, 1.5);
+  assert.equal(out.level, 'B1');
 
-  const none = fakeAi({ votes: ['XXXX', 'XXXX', 'XXXX', 'XXXX', 'XXXX'] });
+  // 三张票都不合法：这一条按「没定出档位」回去（level 为 null），不连累同批别的条目。
+  const none = fakeAi({ votes: ['XXXX', 'XXXX', 'XXXX'] });
   const empty = await start(CEFR_FIXTURE, { ai: none });
-  const bad = await post(empty.base, '/api/level/vote', { word: 'absorb', sense: 0 });
-  assert.equal(bad.status, 502);
-  assert.match(bad.body.error.code, /noLevelVotes|aiField/);
+  const bad = await post(empty.base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 0 }] });
+  assert.equal(bad.status, 200);
+  assert.deepEqual({ level: bad.body.results[0].level, valid: bad.body.results[0].valid }, { level: null, valid: 0 });
 });
 
 // 点「终止」= 关掉这条连接。服务端要把它变成信号往下传，让还在跑的五次投票一起停；
@@ -1364,7 +1370,7 @@ test('POST /api/level/vote drops invalid votes, keeps a spare of five, and repor
 test('closing the connection aborts the running votes and writes nothing back', async () => {
   const signals = [];
   const ai = fakeAi();
-  ai.levelVote = (input, opts) =>
+  ai.levelVoteBatch = (items, opts) =>
     new Promise((_, reject) => {
       signals.push(opts.signal);
       opts.signal.addEventListener('abort', () =>
@@ -1377,31 +1383,32 @@ test('closing the connection aborts the running votes and writes nothing back', 
   const request = fetch(`${base}/api/level/vote`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ word: 'absorb', sense: 0 }),
+    body: JSON.stringify({ targets: [{ word: 'absorb', sense: 0 }] }),
     signal: ac.signal,
   }).catch(() => 'aborted');
 
-  for (let i = 0; i < 100 && signals.length < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
-  assert.equal(signals.length, 5, '五次投票都发出了信号');
+  for (let i = 0; i < 100 && signals.length < 3; i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(signals.length, 3, '三遍都发出了信号');
   ac.abort();
   assert.equal(await request, 'aborted');
   for (let i = 0; i < 100 && !signals.every((s) => s.aborted); i += 1) await new Promise((r) => setTimeout(r, 10));
-  assert.ok(signals.every((s) => s.aborted), '断开连接后五次调用都被中止');
+  assert.ok(signals.every((s) => s.aborted), '断开连接后三次调用都被中止');
   assert.deepEqual(fs.readFileSync(file), before, '复判不写盘');
 });
 
 test('POST /api/level/vote validates its target and surfaces the real upstream failure', async () => {
   const { base } = await start(CEFR_FIXTURE, { ai: fakeAi() });
-  assert.equal((await post(base, '/api/level/vote', { word: 'nope', sense: 0 })).status, 404);
-  assert.equal((await post(base, '/api/level/vote', { word: 'absorb', sense: 9 })).status, 400);
-  assert.equal((await post(base, '/api/level/vote', { word: 'absorb', sense: -1 })).status, 400);
+  assert.equal((await post(base, '/api/level/vote', { targets: [{ word: 'nope', sense: 0 }] })).status, 404);
+  assert.equal((await post(base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 9 }] })).status, 400);
+  assert.equal((await post(base, '/api/level/vote', { targets: [{ word: 'absorb', sense: -1 }] })).status, 400);
+  assert.equal((await post(base, '/api/level/vote', {})).status, 400);
 
   const noAi = await start(CEFR_FIXTURE);
-  assert.equal((await post(noAi.base, '/api/level/vote', { word: 'absorb' })).status, 503);
+  assert.equal((await post(noAi.base, '/api/level/vote', { targets: [{ word: 'absorb' }] })).status, 503);
 
   const broken = fakeAi({ throwError: Object.assign(new Error('没配模型'), { code: 'aiConfig' }) });
   const down = await start(CEFR_FIXTURE, { ai: broken });
-  const err = await post(down.base, '/api/level/vote', { word: 'absorb', sense: 0 });
+  const err = await post(down.base, '/api/level/vote', { targets: [{ word: 'absorb', sense: 0 }] });
   assert.equal(err.status, 503);
   assert.equal(err.body.error.code, 'aiConfig');
 });

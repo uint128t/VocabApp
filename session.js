@@ -442,7 +442,6 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
     ];
     if (!wanted.length) {
       state.status = 'settled';
-      state.settlement = { words: [], backup: null, at: new Date().toISOString() };
       save(state);
       return { ...plan, backup: null, changed: 0, state };
     }
@@ -469,12 +468,6 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
       }
       const backup = edits.length ? store.writeWithBackup(applyEdits(text, edits)).backup : null;
       state.status = 'settled';
-      state.settlement = {
-        words: [...plan.add, ...plan.remove],
-        skipped,
-        backup,
-        at: new Date().toISOString(),
-      };
       save(state);
       return { ...plan, skipped, backup, changed: written, state };
     });

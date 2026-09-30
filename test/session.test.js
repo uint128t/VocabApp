@@ -504,11 +504,6 @@ test('commit 一次写盘并结算', async () => {
   assert.equal(lines[12], '  - [x] #B2 - raised area - There is a bump on the road.');
   assert.deepEqual(fs.readdirSync(backupDir).filter((n) => n.startsWith('Vocabulary.')), [res.backup]);
   assert.equal(session.status().status, 'settled');
-  assert.deepEqual(
-    session.status().settlement.words.map((w) => w.word).sort(),
-    ['abyss', 'bump'],
-  );
-  assert.equal(session.status().settlement.backup, res.backup);
   await assert.rejects(session.commit(), (e) => e.code === 'examSettled');
 });
 
@@ -528,7 +523,6 @@ test('中途被删的词结算时跳过，不卡写盘', async () => {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
   assert.equal(lines[10], '  - [x] #B2 - raised area - There is a bump on the road.');
   assert.equal(session.status().status, 'settled');
-  assert.deepEqual(session.status().settlement.skipped, [{ word: 'abyss', sense: 0, reason: 'wordNotFound' }]);
 });
 
 test('中途被删的词在看词段与测试段都被跨过去', async () => {
@@ -559,7 +553,6 @@ test('没有要改的就不写盘', async () => {
   assert.deepEqual(fs.readFileSync(file), before);
   assert.ok(!fs.existsSync(backupDir));
   assert.equal(session.status().status, 'settled');
-  assert.deepEqual(session.status().settlement, { words: [], backup: null, at: session.status().settlement.at });
 });
 
 test('状态跨重启还在，看词段也能接着看', async () => {
