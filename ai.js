@@ -1,4 +1,9 @@
 const CEFR = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);
+
+// 输出预算一律给到上限：这些任务的输出都很短（一个档位、一句释义、一句点评），预算实际是留给
+// **推理段**的——推理型模型会先想几千字，按输出长度给预算它就空手而归（空内容报 aiEmpty、
+// 退避重试，一次几十秒）。给足让它自己停；上游不收这个数的，把这里往下调。
+const MAX_TOKENS = 131000;
 const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
 function aiError(code, message, details) {
@@ -65,38 +70,29 @@ const cleanField = (value) =>
 
 const ENTRY_RULES = [
   'You fill in one entry of a hand-maintained English-English vocabulary list: the senses a learner should know, each with an example.',
-  'Input is {word, current, referenceLevels, withChinese}. "current" is the entry as it stands today, or null when the word is new; it may be incomplete. "referenceLevels" are CEFR levels taken from published word lists for this word, for related forms of it, and its frequency rank.',
-  'Return at most three senses, most common first, and give every sense these three fields:',
-  'Split a word into separate senses only when the meanings really differ, and fewer when they are close: if two candidates are variants of the same idea, or one is just another wording of the other, merge them into one sense. A short list of clearly distinct senses beats a long list of near-duplicates.',
-  'definition: English-English, at most 8 words, lowercase first letter, no trailing period, no " - " inside, exactly one meaning; for a phrasal verb describe it as verb + particle.',
-  'Never write a part-of-speech label such as "(v.)" or "(n.)": not in the headword, not at the start of a definition. Separate senses are how you tell parts of speech apart.',
-  'chinese: a Simplified Chinese gloss of 2 to 6 characters when withChinese is true, otherwise an empty string; keep the gloss when the current entry already has one.',
-  'example: at most 14 words, everyday real context, must contain an actually inflected form of the word, ends with a period, no " - " inside.',
-  'Do not decide the CEFR level and do not output one: levels are assigned separately, by voting.',
-  'Never change the headword, never bundle two meanings or two parts of speech into one sense, and never output a reference level as the definition.',
+  'Input is {word, current, withChinese}; "current" is the entry as it stands today (null when the word is new) and may be incomplete. Work on the senses only: no levels, no reference word lists, no part-of-speech labels.',
+  'Give at most three senses, most common first, each with exactly definition, chinese, example.',
+  'Merge two candidates whenever one core idea covers both: what the word is applied to, its collocation, how literal it is, and the wording are not what separates senses. Split only when neither sense can be explained through the other. Fewer clearly distinct senses beat a longer list of near-duplicates, and one strong sense is a perfectly good answer.',
+  'definition: English-English, at most 8 words, lowercase first letter, no trailing period, no " - " inside, exactly one meaning; a phrasal verb reads verb + particle.',
+  'chinese: a Simplified Chinese gloss of 2 to 6 characters when withChinese is true, otherwise an empty string; keep the gloss the current entry already has.',
+  'example: at most 14 words of everyday real context, containing an actually inflected form of the word, ending with a period, no " - " inside.',
+  'Never change the headword, never bundle two unrelated meanings into one sense, never pass a reference level off as a definition.',
   'note: one short sentence in Chinese saying what you filled in or changed.',
 ];
 
 export const CONTRACTS = {
   entry:
-    'Output ONLY a JSON object with no prose and no code fences. Keys: senses, note. senses must be an array of objects with exactly definition, chinese, example.',
+    'Output ONLY a JSON object, no prose, no code fences. Keys: senses — an array of objects with exactly definition, chinese, example — and note.',
   judge:
     'Output ONLY a JSON object with no prose and no code fences. Keys: pass, reason, suggestion. pass must be a boolean.',
   example:
     'Output ONLY a JSON object with no prose and no code fences. Keys: example. example must be one English sentence of at most 14 words and must end with a period.',
-  level:
-    'Output ONLY a JSON object with no prose and no code fences. Keys: level. level must be exactly one of A1, A2, B1, B2, C1, C2.',
+  levels:
+    "Output ONLY a JSON object, no prose, no code fences. Keys: levels — one object per numbered sense, each with exactly id and level (id echoes the number; level is exactly one of A1, A2, B1, B2, C1, C2).",
 };
 
 function entryInstructions() {
   return ENTRY_RULES.join(' ');
-}
-
-export function defaultPrompts() {
-  return {
-    entry: entryInstructions(),
-    judge: judgeInstructions('zh'),
-  };
 }
 
 const JUDGE_RULES = [
@@ -228,12 +224,13 @@ const NO_EXAMPLE_NOTE =
 const EXAMPLE_RULES =
   'You write one fresh example sentence for an English word in a vocabulary list. It must be natural, everyday and self-contained, must use the word in an actually inflected form, and must clearly show the given meaning.';
 
-// 档位复判（任务三起成为唯一的定档路径）：只给词与某一条义项，让模型独立定一次档。
-// 参考词表给的东西一并奉上，采信还是推翻由它自己判断；跑多次取平均，所以每次都要独立作答。
+// 定档（任务三起是唯一的定档路径）：一次判一批，每条义项独立作答、各回一个档位。
+// 参考词表给的东西一并奉上，采信还是推翻由它自己判断；同一条义项要跑多次取平均，所以每次都独立作答。
 const LEVEL_RULES =
-  'You assign one CEFR level to a single sense of an English word, from your own knowledge. Judge that one sense, not the word as a whole: how common it is, how early a learner meets it, how specialised it is. A1 and A2 are everyday core senses, B1 and B2 are general but less basic ones, C1 and C2 are advanced, formal, literary or technical ones. Give the single level you judge most likely, never a range.';
+  'You assign one CEFR level to each sense of an English word, from your own knowledge: how common it is, how early a learner meets it, how specialised it is. A1/A2 are everyday core senses, B1/B2 general but less basic, C1/C2 advanced, formal, literary or technical. Judge every sense on its own — one must not pull another — and give the one level you judge most likely, never a range.';
+const LEVEL_BATCH_NOTE = 'Senses come numbered; return one entry per number.';
 const LEVEL_REFERENCE_NOTE =
-  'Published word lists were checked for this word and its derived forms; whatever they gave is listed after "reference" below. Treat it as evidence you may follow or overrule, and never let it replace your own reading of the sense.';
+  'The "reference" line lists what published word lists say about this word and its derived forms: evidence you may follow or overrule, never a substitute for your own reading of the sense.';
 
 // 参考档位压缩成一行给模型看：来源 + 可选词性 + 档位；派生词额外标出是词形归并还是词根推测。
 function referenceLine(referenceLevels) {
@@ -256,6 +253,10 @@ export function createAi({
   getPrompts = () => ({}),
   getEndpoints = () => ({}),
 } = {}) {
+  // 用量累计（D37）：进程起来之后所有调用的总和，前端拿两次读数相减就是这一轮的。
+  // 失败的那次也计一次 calls（它的输入是实打实发出去的），token 数按上游报的加。
+  const usage = { calls: 0, prompt: 0, completion: 0, reasoning: 0 };
+
   const system = (key, fallback) => {
     const custom = getPrompts()?.[key];
     return typeof custom === 'string' && custom.trim() ? custom.trim() : fallback;
@@ -276,10 +277,20 @@ export function createAi({
     return { base, key: hit.apiKey, extra: hit.extra, name };
   };
 
-  async function once(messages, { maxTokens, temperature, signal }, target) {
-    const body = { model: target.name, messages, temperature };
+  async function once(messages, { maxTokens, signal }, target) {
+    // 不带 temperature：推理型模型不认这个参数，发过去也是被忽略。
+    // 默认关掉推理段（thinking.type = disabled）：这几个任务的输出都很短（一个档位、一句释义），
+    // 推理段却要烧上千 token，是账单的大头。实测 deepseek 与 dashscope 都认这个写法，关掉后
+    // 推理 token 直接归零。哪个模型不收它就覆盖掉——extra 里写别的值就是覆盖，写 `null` 就是
+    // 「别带这个字段」（智谱既收不下它、又强制思考，只能退成 reasoning_effort: low）。
+    const body = { model: target.name, messages, thinking: { type: 'disabled' } };
     if (maxTokens) body.max_tokens = maxTokens;
-    Object.assign(body, target.extra || {});
+    // extra 里显式写 null 就是「这个模型别带这个字段」：会拒绝未知参数的端点就靠它
+    // （智谱那条就是 `{"thinking": null, "reasoning_effort": "low"}`）。
+    for (const [k, v] of Object.entries(target.extra || {})) {
+      if (v === null) delete body[k];
+      else body[k] = v;
+    }
     // 两个信号并一个：超时照旧（默认 90 秒），调用方一终止也跟着停。
     const timeout = AbortSignal.timeout(timeoutMs);
 
@@ -308,6 +319,14 @@ export function createAi({
     } catch {
       throw aiError('aiShape', `上游返回不是 JSON：${raw.slice(0, 200)}`);
     }
+    // 记账：一次批量要跑几千次调用，花了多少得看得见（输入 / 输出 / 其中推理）。
+    usage.calls += 1;
+    const u = data?.usage;
+    if (u) {
+      usage.prompt += u.prompt_tokens || 0;
+      usage.completion += u.completion_tokens || 0;
+      usage.reasoning += u.completion_tokens_details?.reasoning_tokens || 0;
+    }
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== 'string') throw aiError('aiShape', '上游响应里没有 message.content');
     // 空内容多半是上游一次坏生成（推理段吃光预算、网关抽风），也可能是模型在「想」而不是在答。
@@ -323,11 +342,11 @@ export function createAi({
     return content;
   }
 
-  async function chat(messages, { model, maxTokens, temperature = 0, signal } = {}) {
+  async function chat(messages, { model, maxTokens, signal } = {}) {
     const target = targetFor(model);
     for (let attempt = 0; ; attempt++) {
       try {
-        return await once(messages, { model, maxTokens, temperature, signal }, target);
+        return await once(messages, { maxTokens, signal }, target);
       } catch (e) {
         // 被终止的就别再来一轮：退避等待只会让「终止」按下去之后还拖着。
         if (e.code === 'aiAborted') throw e;
@@ -377,7 +396,7 @@ export function createAi({
         { role: 'system', content: parts.join(' ') },
         { role: 'user', content: round ? `${asked}\n${EXAM_RETRY_NUDGE}` : asked },
       ];
-      const { obj, content } = await askJson(messages, { model, maxTokens: 1600, temperature: 0 });
+      const { obj, content } = await askJson(messages, { model, maxTokens: MAX_TOKENS });
       if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
         throw aiError('aiJson', `模型没有返回可用 JSON：${String(content).slice(0, 200)}`);
       }
@@ -411,7 +430,7 @@ export function createAi({
     const startedAt = Date.now();
     await once(
       [{ role: 'user', content: 'Reply with the single word OK' }],
-      { model: name, maxTokens: 200, temperature: 0 },
+      { model: name, maxTokens: MAX_TOKENS },
       { base, key, extra: target.extra, name },
     );
     return { ok: true, model: name, baseUrl: base, latencyMs: Date.now() - startedAt };
@@ -423,7 +442,7 @@ export function createAi({
         { role: 'system', content: `${EXAMPLE_RULES} ${CONTRACTS.example}` },
         { role: 'user', content: `word: ${word}\nmeaning: ${typeof definition === 'string' ? definition.trim() : ''}` },
       ],
-      { model, maxTokens: 400, temperature: 0 },
+      { model, maxTokens: MAX_TOKENS },
     );
     const raw = obj && typeof obj === 'object' && !Array.isArray(obj) ? obj.example : null;
     const example = cleanField(typeof raw === 'string' ? raw : '');
@@ -431,42 +450,45 @@ export function createAi({
     return { example };
   }
 
-  // 定档：给一条义项投一次票（任务三起也是唯一的定档路径）。温度交给调用方，
-  // 0 会让五票同声、平均没意义。
-  async function levelVote({ word, definition, example, referenceLevels = null }, { model, temperature = 0.9, signal } = {}) {
-    const refs = referenceLine(referenceLevels);
+  // 定档：一次判一批义项（任务三起是唯一的定档路径）。几条摆在一起，固定那份规则与说明
+  // 只摊一次——原来逐条问，每条都要把它重发一遍，这就是它贵的原因。编号从 1 开始、原样回显；
+  // 认不出的编号、缺的、报了非法档位的都算空票，由调用方按有效票处理。
+  async function levelVoteBatch(items, { model, signal } = {}) {
+    const ask = (item, i) =>
+      [
+        `${i + 1}. word: ${item.word}`,
+        `   sense: ${typeof item.definition === 'string' ? item.definition.trim() : ''}`,
+        item.example ? `   example: ${String(item.example).trim()}` : null,
+        `   reference: ${referenceLine(item.referenceLevels) || 'none, the published lists do not cover this word'}`,
+      ]
+        .filter(Boolean)
+        .join('\n');
     const { obj } = await askJson(
       [
-        { role: 'system', content: `${LEVEL_RULES} ${LEVEL_REFERENCE_NOTE} ${CONTRACTS.level}` },
-        {
-          role: 'user',
-          content: [
-            `word: ${word}`,
-            `sense: ${typeof definition === 'string' ? definition.trim() : ''}`,
-            example ? `example: ${String(example).trim()}` : null,
-            refs ? `reference: ${refs}` : 'reference: none, the published lists do not cover this word',
-          ]
-            .filter(Boolean)
-            .join('\n'),
-        },
+        { role: 'system', content: `${LEVEL_RULES} ${LEVEL_BATCH_NOTE} ${LEVEL_REFERENCE_NOTE} ${CONTRACTS.levels}` },
+        { role: 'user', content: items.map(ask).join('\n') },
       ],
-      // 200 不够：推理型模型会把整个预算烧在推理段上（实测 completion_tokens 全是
-      // reasoning_tokens、content 空），一张票就废了。这里给足，输出本来只有一个档位。
-      { model, maxTokens: 1200, temperature, signal },
+      { model, maxTokens: MAX_TOKENS, signal },
     );
-    const level = normalizeDifficulty(obj && typeof obj === 'object' && !Array.isArray(obj) ? obj.level : null);
-    return { level };
+    const got = new Map();
+    const rows = obj && typeof obj === 'object' && Array.isArray(obj.levels) ? obj.levels : [];
+    for (const row of rows) {
+      const id = Number(row && row.id);
+      if (!Number.isInteger(id) || id < 1 || id > items.length || got.has(id - 1)) continue;
+      got.set(id - 1, normalizeDifficulty(row.level));
+    }
+    return { levels: items.map((_, i) => (got.has(i) ? got.get(i) : null)) };
   }
 
-  async function sensesEntry({ word, current = null, referenceLevels = null, withChinese = false }, { model, signal } = {}) {
+  async function sensesEntry({ word, current = null, withChinese = false }, { model, signal } = {}) {
     const keepChinese = Boolean(current && ((current.senses || []).some((s2) => s2.chinese) || current.headChinese));
     const wantChinese = withChinese === true || keepChinese;
     let { obj, content } = await askJson(
       [
         { role: 'system', content: `${system('entry', entryInstructions())} ${CONTRACTS.entry}` },
-        { role: 'user', content: JSON.stringify({ word, current, referenceLevels, withChinese: wantChinese }) },
+        { role: 'user', content: JSON.stringify({ word, current, withChinese: wantChinese }) },
       ],
-      { model, maxTokens: 1400, temperature: 0, signal },
+      { model, maxTokens: MAX_TOKENS, signal },
     );
     if (Array.isArray(obj)) obj = { senses: obj };
     if (obj && typeof obj === 'object' && obj.senses && !Array.isArray(obj.senses) && typeof obj.senses === 'object') {
@@ -499,7 +521,8 @@ export function createAi({
     sensesEntry,
     judgeEntry,
     exampleEntry,
-    levelVote,
+    levelVoteBatch,
     testTarget,
+    usage: () => ({ ...usage }),
   };
 }

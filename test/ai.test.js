@@ -13,7 +13,7 @@ const ok = (content) => {
   };
 };
 
-function harness({ responses, extra = { enable_thinking: false }, prompts } = {}) {
+function harness({ responses, extra = {}, prompts } = {}) {
   const calls = [];
   const slept = [];
   const queue = [...responses];
@@ -77,10 +77,32 @@ test('chat posts to chat/completions with the key, model and extra params', asyn
   assert.deepEqual(body, {
     model: 'qwen3.8-flash',
     messages: [{ role: 'user', content: 'hi' }],
-    temperature: 0,
+    thinking: { type: 'disabled' },
     max_tokens: 16,
-    enable_thinking: false,
   });
+  // 推理型模型不认 temperature，干脆不发。
+  assert.ok(!('temperature' in body), '不带 temperature');
+});
+
+test('推理段默认关掉，模型自己的 extra 说了算', async () => {
+  const quiet = harness({ responses: [ok('ok')] });
+  await quiet.ai.chat([{ role: 'user', content: 'hi' }]);
+  assert.deepEqual(JSON.parse(quiet.calls[0].init.body).thinking, { type: 'disabled' });
+
+  // 覆盖：换一个值就是换一个值（智谱就是靠这一手用的 reasoning_effort）。
+  const loud = harness({ responses: [ok('ok')], extra: { thinking: { type: 'enabled' } } });
+  await loud.ai.chat([{ role: 'user', content: 'hi' }]);
+  assert.deepEqual(JSON.parse(loud.calls[0].init.body).thinking, { type: 'enabled' });
+
+  // 显式 null = 这个模型别带这个字段（智谱收不下 thinking）。
+  const off = harness({ responses: [ok('ok')], extra: { thinking: null } });
+  await off.ai.chat([{ role: 'user', content: 'hi' }]);
+  assert.ok(!('thinking' in JSON.parse(off.calls[0].init.body)));
+
+  // 默认参数不止这一个能被摘掉：null 对谁都成立。
+  const noMax = harness({ responses: [ok('ok')], extra: { max_tokens: null } });
+  await noMax.ai.chat([{ role: 'user', content: 'hi' }], { maxTokens: 16 });
+  assert.ok(!('max_tokens' in JSON.parse(noMax.calls[0].init.body)));
 });
 
 test('chat retries 429 and 5xx with backoff but never retries 4xx', async () => {
@@ -123,7 +145,7 @@ test('an aborted call stops at once instead of being retried as an upstream fail
       });
     },
   });
-  const vote = ai.levelVote({ word: 'absorb', definition: 'take in' }, { model: 'm', signal: ac.signal });
+  const vote = ai.levelVoteBatch([{ word: 'absorb', definition: 'take in' }], { model: 'm', signal: ac.signal });
   const entry = ai.sensesEntry({ word: 'absorb' }, { model: 'm', signal: ac.signal });
   ac.abort();
   await assert.rejects(vote, (e) => e.code === 'aiAborted');
@@ -144,7 +166,7 @@ const ENTRY_REPLY = JSON.stringify({
   note: '补了两条义项',
 });
 
-test('sensesEntry in draft mode asks for senses and leaves the level to the vote', async () => {
+test('sensesEntry in draft mode asks for senses without touching levels', async () => {
   const { ai, calls } = harness({ responses: [ok(ENTRY_REPLY)] });
   const out = await ai.sensesEntry({ word: 'absorb', withChinese: true });
   assert.deepEqual(out, {
@@ -157,12 +179,16 @@ test('sensesEntry in draft mode asks for senses and leaves the level to the vote
   });
   const body = JSON.parse(calls[0].init.body);
   assert.ok(body.messages[0].content.endsWith(CONTRACTS.entry));
-  assert.match(body.messages[0].content, /referenceLevels/);
-  // 档位不在这里定：提示词要明确说不输出档位（D30）。
-  assert.match(body.messages[0].content, /Do not decide the CEFR level/);
+  // 参考档位只喂给定档那一路，补齐这里一个字都不提。
+  assert.ok(!/referenceLevels/.test(body.messages[0].content));
+  assert.ok(!/CEFR/.test(body.messages[0].content));
+  // 补齐这一侧不提档位的事：字段清单里没有 level，也不提「投票」——定档是另一条路径。
   assert.ok(!/levelBasis/.test(body.messages[0].content));
+  assert.ok(!/by voting|Do not decide the CEFR/.test(body.messages[0].content));
+  // 相近的候选必须并成一条：判据是「一个核心意思能不能罩住两个」。
+  assert.match(body.messages[0].content, /Merge two candidates whenever one core idea covers both/);
   const sent = JSON.parse(body.messages[1].content);
-  assert.deepEqual(sent, { word: 'absorb', current: null, referenceLevels: null, withChinese: true });
+  assert.deepEqual(sent, { word: 'absorb', current: null, withChinese: true });
 });
 
 test('sensesEntry in draft mode drops chinese when it was not asked for', async () => {
@@ -316,10 +342,9 @@ const REFACTOR_INPUT = {
     senses: [{ level: 'B1', definition: null, chinese: null, example: 'Plants absorb water.' }],
     rawLines: ['- [ ] absorb - take in', '  - #B1 · Plants absorb water.'],
   },
-  referenceLevels: { word: 'absorb', levels: [{ source: 'CEFR-J', pos: 'verb', level: 'B1' }], related: [] },
 };
 
-test('sensesEntry in refactor mode sends the current entry plus the reference levels', async () => {
+test('sensesEntry in refactor mode sends the current entry and nothing about levels', async () => {
   const { ai, calls } = harness({ responses: [ok(ENTRY_REPLY)] });
   const out = await ai.sensesEntry(REFACTOR_INPUT);
   assert.equal(out.senses.length, 2);
@@ -328,7 +353,7 @@ test('sensesEntry in refactor mode sends the current entry plus the reference le
   assert.equal(out.senses[1].level, null);
   const sent = JSON.parse(JSON.parse(calls[0].init.body).messages[1].content);
   assert.deepEqual(sent.current, REFACTOR_INPUT.current);
-  assert.deepEqual(sent.referenceLevels, REFACTOR_INPUT.referenceLevels);
+  assert.deepEqual(Object.keys(sent).sort(), ['current', 'withChinese', 'word']);
   assert.equal(sent.withChinese, false);
 });
 
@@ -363,8 +388,8 @@ test('a model can be routed to its own endpoint and key', async () => {
   const ai = createAi({
     getDefaultModel: () => 'qwen3.8-flash',
     getEndpoints: () => ({
-      'qwen3.8-flash': { baseUrl: 'https://dashscope.test/v1', apiKey: 'sk-default', extra: { enable_thinking: false } },
-      'glm-4.5': { baseUrl: 'https://zhipu.test/v4', apiKey: 'sk-z', extra: {} },
+      'qwen3.8-flash': { baseUrl: 'https://dashscope.test/v1', apiKey: 'sk-default', extra: { thinking: { type: 'enabled' } } },
+      'glm-4.5': { baseUrl: 'https://zhipu.test/v4', apiKey: 'sk-z', extra: { thinking: null } },
     }),
     fetchImpl: async (url, init) => {
       sent.push({ url, auth: init.headers.authorization, model: JSON.parse(init.body).model, body: JSON.parse(init.body) });
@@ -381,8 +406,8 @@ test('a model can be routed to its own endpoint and key', async () => {
       ['https://zhipu.test/v4/chat/completions', 'Bearer sk-z', 'glm-4.5'],
     ],
   );
-  assert.ok(!('enable_thinking' in sent[1].body), '自定义模型的 extra 覆盖了全局参数');
-  assert.equal(sent[0].body.enable_thinking, false, '默认模型仍带自己配置的 extra');
+  assert.ok(!('thinking' in sent[1].body), 'extra 里写 null 就把这个字段摘掉');
+  assert.deepEqual(sent[0].body.thinking, { type: 'enabled' }, '模型自己的 extra 压过默认值');
 
   const full = createAi({
     getDefaultModel: () => 'm',
@@ -633,22 +658,36 @@ test('learner text is collapsed to one line before it reaches the prompt', async
   assert.match(sent, /learner example: He angled his line\./);
 });
 
-test('levelVote normalizes the level and asks with the voting temperature', async () => {
-  const { ai, calls } = harness({ responses: [ok('{"level":"b2"}')] });
-  assert.deepEqual(await ai.levelVote({ word: 'feckless', definition: 'not reliable', example: 'A feckless clerk.' }), { level: 'B2' });
+test('levelVoteBatch 一次判一批，按编号回显、缺的算空票', async () => {
+  const items = [
+    { word: 'feckless', definition: 'not reliable', example: 'A feckless clerk.', referenceLevels: null },
+    { word: 'abyss', definition: 'deep hole', referenceLevels: null },
+  ];
+  const { ai, calls } = harness({
+    responses: [ok('{"levels":[{"id":1,"level":"b2"},{"id":2,"level":"C2"}]}')],
+  });
+  assert.deepEqual(await ai.levelVoteBatch(items), { levels: ['B2', 'C2'] });
   const body = JSON.parse(calls[0].init.body);
-  assert.equal(body.temperature, 0.9);
+  assert.ok(!('temperature' in body));
   assert.match(body.messages[0].content, /never a range/);
-  assert.ok(body.messages[0].content.endsWith(CONTRACTS.level));
-  assert.match(body.messages[1].content, /word: feckless/);
-  assert.match(body.messages[1].content, /sense: not reliable/);
+  assert.match(body.messages[0].content, /one entry per number/);
+  assert.ok(body.messages[0].content.endsWith(CONTRACTS.levels));
+  // 两条摆在同一段里，各自带编号
+  assert.match(body.messages[1].content, /1\. word: feckless/);
+  assert.match(body.messages[1].content, /2\. word: abyss/);
   assert.match(body.messages[1].content, /example: A feckless clerk\./);
   assert.equal(body.model, 'qwen3.8-flash');
 
-  // 非法或缺失的档位不当成票，交给调用方按有效票数处理。
-  for (const content of ['{"level":"B3"}', '{"level":7}', '{"other":"B2"}']) {
+  // 编号缺失、越界、重复、或者档位非法：那一条算空票（null），不编造。
+  const messy = harness({
+    responses: [ok('{"levels":[{"id":2,"level":"B3"},{"id":9,"level":"B1"},{"id":1,"level":"C1"},{"id":1,"level":"A2"}]}')],
+  });
+  assert.deepEqual(await messy.ai.levelVoteBatch(items), { levels: ['C1', null] });
+
+  // 形状不对（缺 levels、根本不是对象）同样按全空票处理，交给上层按有效票决定。
+  for (const content of ['{"level":"B2"}', '{"other":true}', '[]']) {
     const bad = harness({ responses: [ok(content), ok(content)] });
-    assert.deepEqual(await bad.ai.levelVote({ word: 'feckless', definition: 'not reliable' }), { level: null }, content);
+    assert.deepEqual(await bad.ai.levelVoteBatch(items), { levels: [null, null] }, content);
   }
 });
 
