@@ -1,8 +1,9 @@
 // 词表面板：统计与侧栏概览、列表渲染、就地编辑、复选与批量操作、重构建议面板、
 // 以及条目右下角的「考这个词」。
 
-import { $, CEFR, state, api, toast, text, fillSelect } from './core.js';
-import { senseRow, readSenses, relatedLabel, answerRow } from './sense-ui.js';
+import { $, CEFR, state, api, toast, text, fillSelect, inChunks } from './core.js';
+import { senseRow, readSenses, levelSourceLine, answerRow, levelVote } from './sense-ui.js';
+import { levelCard } from './level-card.js';
 import { settings } from './settings-panel.js';
 
 function visibleEntries() {
@@ -84,6 +85,19 @@ function editForm(entry, li) {
   );
   for (const sense of senses) list.append(senseRow(entry, sense, { withCheck: true }));
 
+  // 表里只存了档位本身，查表过程没落盘；补一次只查表的请求，把逐步命中填进每行的依据方块。
+  api('/api/level/plan', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ words: [entry.word] }),
+  })
+    .then((res) => {
+      const trace = res.items[0]?.trace;
+      if (!trace) return;
+      for (const row of list.querySelectorAll('.sense-item')) row.api?.card?.api?.update({ trace });
+    })
+    .catch(() => {});
+
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'btn ghost';
@@ -131,6 +145,12 @@ function editForm(entry, li) {
     const empty = rows.findIndex((r) => !r.definition);
     if (empty >= 0) {
       msg.textContent = `第 ${empty + 1} 条义项缺释义`;
+      msg.className = 'edit-msg bad';
+      return;
+    }
+    const noLevel = rows.findIndex((r) => !r.level);
+    if (noLevel >= 0) {
+      msg.textContent = `第 ${noLevel + 1} 条义项还没定档，先选一个`;
       msg.className = 'edit-msg bad';
       return;
     }
@@ -350,7 +370,7 @@ function wordCheckCard(e, li) {
 
   const hint = document.createElement('p');
   hint.className = 'quiz-hint';
-  hint.textContent = '就地问答：填哪条判哪条，留空的不判。判定不写盘，通过的义项旁边会出现「勾选为已掌握」。';
+  hint.textContent = '就地问答：填哪条判哪条，留空的不判；例句可选，填了会一起判。判定不写盘，通过的义项旁边会出现「勾选为已掌握」。';
 
   const list = document.createElement('div');
   list.className = 'answer-list';
@@ -405,6 +425,7 @@ function wordCheckCard(e, li) {
             word: e.word,
             sense: row.api.sense,
             userDefinition: row.api.input.value.trim(),
+            userExample: row.api.exampleInput.value.trim(),
             lang: settings ? settings.lang : 'zh',
           }),
         });
@@ -533,7 +554,9 @@ function syncSelection() {
     ? `已选 ${selected.size} 个词${inView !== selected.size ? `（当前筛选里 ${inView} 个）` : ''}`
     : '未选中任何词';
   const none = selected.size === 0;
-  for (const id of ['#markChecked', '#markUnchecked', '#refactorBtn']) $(id).disabled = none;
+  // 批量跑着的时候一律锁住。这几个按钮的 disabled 本来有两个人写（这里按选中数量、跑起来时
+  // 按进度），中途被这里重新点亮就能起第二批，把前一批的「终止」顶掉。
+  for (const id of ['#markChecked', '#markUnchecked', '#refactorBtn', '#levelBtn']) $(id).disabled = none || batchBusy;
   $('#selectAll').checked = shown.length > 0 && shown.every((e) => selected.has(e.word));
 }
 
@@ -601,20 +624,17 @@ function refactorRow(item) {
     line.className = 'child';
     const tag = document.createElement('span');
     tag.className = 'tag';
-    tag.dataset.level = sense.level;
-    tag.textContent = `#${sense.level}`;
+    if (sense.level) tag.dataset.level = sense.level;
+    tag.textContent = sense.level ? `#${sense.level}` : '#—';
     line.append(tag, document.createTextNode(` ${sense.definition}${sense.chinese ? ` · ${sense.chinese}` : ''} — ${sense.example}`));
     senses.append(line);
+    // 定档依据跟着每条义项走，展开能看到逐步命中与五次投票。
+    senses.append(levelCard({ level: sense.level, vote: sense.vote, trace: sense.trace, error: sense.voteError }));
   }
   li.append(senses);
 
-  const refs = (item.referenceLevels?.levels || []).map((l) => `${l.source}${l.pos ? ` ${l.pos}` : ''} ${l.level}`);
-  for (const rel of item.referenceLevels?.related || []) {
-    refs.push(relatedLabel(rel));
-  }
   const notes = [];
   if (item.note) notes.push(item.note);
-  if (refs.length) notes.push(`参考档位：${refs.join(' · ')}`);
   if (notes.length) {
     const hint = document.createElement('div');
     hint.className = 'hint';
@@ -630,17 +650,21 @@ function refactorRow(item) {
   return li;
 }
 
-function renderRefactorPanel(items) {
+function renderRefactorPanel(items, { stopped = false } = {}) {
   const panel = $('#refactorPanel');
   panel.innerHTML = '';
   panel.hidden = false;
   if (!items.length) {
-    panel.textContent = '没有待确认的重构建议。';
+    panel.textContent = stopped
+      ? '上一轮被终止时还没跑完任何一个词，再点一次「重构选中的词」就是了。'
+      : '没有待确认的重构建议。';
     return;
   }
   const head = document.createElement('p');
   head.className = 'quiz-hint';
-  head.textContent = `重构建议 ${items.length} 条 · 勾选后一次写盘，写盘前自动备份`;
+  head.textContent = `重构建议 ${items.length} 条 · 勾选后一次写盘，写盘前自动备份${
+    stopped ? ' · 上一轮中途终止，这里只是已经跑完的那部分' : ''
+  }`;
   panel.append(head);
 
   const actions = document.createElement('div');
@@ -705,30 +729,379 @@ function renderRefactorPanel(items) {
   });
 }
 
+// 档位复判（任务三）：档位依据没写进 markdown，只有生成那一刻知道，所以能复判的近似判据是
+// 「这个词在参考词表里有没有东西可依」——一点参考都没有的那些义项，当初的档位就是纯 AI 自判。
+// 三次点击：出清单（不调模型）→ 对勾选的义项分块并发跑五次取平均 → 核对后一次写盘。
+// 行的样子与「重构」那面板一致（同一套 li/preview 版式），但**不展示例句**：这一版只关心档位。
+function levelRow(item, sense, index) {
+  const li = document.createElement('li');
+  const pick = document.createElement('input');
+  pick.type = 'checkbox';
+  pick.className = 'refactor-pick';
+  pick.disabled = !sense.definition;
+  // 档位现在一律由五票定（D30），所以默认全勾：复判是给旧数据按新口径重算一遍。
+  pick.checked = !pick.disabled;
+
+  const word = document.createElement('strong');
+  word.textContent = `${item.word} · 义项 ${index + 1}`;
+  const move = document.createElement('span');
+  move.className = 'def';
+  move.textContent = sense.level ? `#${sense.level}` : '#—';
+  const out = document.createElement('span');
+  out.className = 'save-state';
+  li.append(pick, word, move, out);
+
+  const senses = document.createElement('div');
+  senses.className = 'refactor-senses';
+  const line = document.createElement('div');
+  line.className = 'child';
+  line.textContent = `${sense.definition || '（缺释义）'}${sense.chinese ? ` · ${sense.chinese}` : ''}`;
+  const card = levelCard({ level: sense.level, trace: item.trace });
+  senses.append(line, card);
+  li.append(senses);
+
+  li.api = { item, sense, index, pick, out, card, move, level: sense.level };
+  return li;
+}
+
+function renderLevelPanel(res) {
+  const panel = $('#levelPanel');
+  panel.innerHTML = '';
+  panel.hidden = false;
+  const rows = [];
+  const total = res.items.reduce((n, item) => n + item.senses.length, 0);
+  if (!total) {
+    panel.textContent = res.missing.length ? `没有可复判的词（${res.missing.length} 个查不到）` : '没有可复判的义项';
+    return;
+  }
+
+  const head = document.createElement('p');
+  head.className = 'quiz-hint';
+  head.textContent = `档位复判 ${res.items.length} 个词 / ${total} 条义项：默认全勾，每条的档位都重新跑五次投票取平均（带查表命中的参考）；展开每条的依据能看每一步命中了什么。`;
+  panel.append(head);
+
+  const actions = document.createElement('div');
+  actions.className = 'row';
+  const all = document.createElement('button');
+  all.type = 'button';
+  all.className = 'btn ghost';
+  all.textContent = '全选';
+  const none = document.createElement('button');
+  none.type = 'button';
+  none.className = 'btn ghost';
+  none.textContent = '全不选';
+  const vote = document.createElement('button');
+  vote.type = 'button';
+  vote.className = 'btn';
+  vote.textContent = '开始复判';
+  const stop = document.createElement('button');
+  stop.type = 'button';
+  stop.className = 'btn ghost';
+  stop.textContent = '终止';
+  stop.hidden = true;
+  const status = document.createElement('span');
+  status.className = 'save-state';
+  actions.append(all, none, vote, stop, status);
+  panel.append(actions);
+
+  const list = document.createElement('ul');
+  list.className = 'preview';
+  for (const item of res.items) {
+    const chapter = document.createElement('li');
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = item.covered === 0 ? '参考词表未收录' : `有 ${item.covered} 条参考档位`;
+    const title = document.createElement('strong');
+    title.textContent = `### ${item.chapter} · ${item.word}`;
+    chapter.append(title, tag);
+    if (item.covered) chapter.append(document.createTextNode(levelSourceLine(item.referenceLevels).join(' · ')));
+    list.append(chapter);
+    item.senses.forEach((sense, i) => {
+      const row = levelRow(item, sense, i);
+      rows.push(row.api);
+      list.append(row);
+    });
+  }
+  panel.append(list);
+
+  const confirm = document.createElement('input');
+  confirm.type = 'checkbox';
+  const confirmWrap = document.createElement('label');
+  confirmWrap.className = 'row-inline';
+  confirmWrap.append(confirm, document.createTextNode(' 已核对清单，确认写回词表'));
+  const commit = document.createElement('button');
+  commit.type = 'button';
+  commit.className = 'btn primary';
+  commit.textContent = '确认写入';
+  commit.disabled = true;
+  const done = document.createElement('span');
+  done.className = 'save-state';
+  const foot = document.createElement('div');
+  foot.className = 'row';
+  foot.append(confirmWrap, commit, done);
+  panel.append(foot);
+
+  const chosen = () => rows.filter((r) => r.pick.checked);
+  all.addEventListener('click', () => {
+    for (const r of rows) if (!r.pick.disabled) r.pick.checked = true;
+  });
+  none.addEventListener('click', () => {
+    for (const r of rows) r.pick.checked = false;
+  });
+
+  // 「终止」只关连接：服务端跟着停掉还在跑的那些投票，已经跑完的结果原样留着。
+  // 没跑的那些不记 r.to，所以再点一次（按钮这时写着「继续复判」）就从它们接着跑。
+  let controller = null;
+  stop.addEventListener('click', () => {
+    stop.disabled = true;
+    status.textContent = '正在终止…';
+    status.className = 'save-state';
+    controller?.abort();
+  });
+
+  vote.addEventListener('click', async () => {
+    const targets = chosen().filter((r) => r.to === undefined);
+    if (!targets.length) {
+      status.textContent = '没有勾选待复判的义项';
+      status.className = 'save-state bad';
+      return;
+    }
+    vote.disabled = true;
+    stop.hidden = false;
+    stop.disabled = false;
+    // 复判投票也算一条批量：跑着的时候工具栏那几个按钮一起锁住。
+    batchBusy = true;
+    syncSelection();
+    controller = new AbortController();
+    let ok = 0;
+    // 分块并发（√n 一块）：一次跑完几十条要等太久，全并发又会把上游打爆。
+    const results = await inChunks(
+      targets,
+      async (r) => {
+        try {
+          const res2 = await api('/api/level/vote', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ word: r.item.word, sense: r.index, model: $('#model').value }),
+            signal: controller.signal,
+          });
+          r.to = res2.level;
+          r.card.api.update({ level: res2.level, vote: res2, trace: res2.trace });
+          r.move.textContent = `${r.level ? `#${r.level} → ` : ''}#${res2.level}`;
+          r.out.textContent = `${res2.agree}/${res2.valid} 票一致${res2.valid < 5 ? `（${5 - res2.valid} 票空）` : ''}`;
+          if (res2.from !== res2.level) ok += 1;
+        } catch (e) {
+          // 被终止的那几条不算失败：它们只是还没跑，重开一轮就会补上。
+          const cut = e.name === 'AbortError' || e.aborted;
+          r.out.textContent = cut ? '已终止，还没跑' : `复判失败：${e.message}`;
+          r.out.className = cut ? 'save-state' : 'save-state bad';
+        }
+      },
+      (n, total) => {
+        status.textContent = `复判中 ${n}/${total}…`;
+        status.className = 'save-state';
+      },
+      controller.signal,
+    );
+    controller = null;
+    stop.hidden = true;
+    vote.disabled = false;
+    batchBusy = false;
+    syncSelection();
+    const stopped = results.some((r) => r.aborted);
+    const left = targets.filter((r) => r.to === undefined).length;
+    for (const r of targets) {
+      if (r.to === undefined && !r.out.textContent) r.out.textContent = stopped ? '已终止，还没跑' : '没跑成';
+    }
+    done.textContent = '';
+    vote.textContent = left ? '继续复判' : '开始复判';
+    if (!left) {
+      status.textContent = `复判完成 · ${ok} 条档位会变`;
+      status.className = 'save-state';
+    } else if (stopped) {
+      status.textContent = `已终止 · 跑完 ${targets.length - left}/${targets.length}，还剩 ${left} 条`;
+      status.className = 'save-state';
+    } else {
+      status.textContent = `有 ${left} 条没跑成 · 再点一次重试`;
+      status.className = 'save-state bad';
+    }
+  });
+
+  confirm.addEventListener('change', () => {
+    commit.disabled = !confirm.checked;
+  });
+
+  commit.addEventListener('click', async () => {
+    // 写回只改档位：其余字段照抄清单里的现状，一次写盘一份备份。
+    const byWord = new Map();
+    const changedWords = new Set();
+    for (const r of rows) {
+      if (r.to === undefined) continue;
+      if (!byWord.has(r.item.word)) {
+        byWord.set(r.item.word, {
+          word: r.item.word,
+          checked: r.item.checked,
+          senses: r.item.senses.map((s) => ({
+            level: s.level,
+            definition: s.definition,
+            chinese: s.chinese,
+            example: s.example,
+            checked: s.checked,
+          })),
+        });
+      }
+      const item = byWord.get(r.item.word);
+      if (item.senses[r.index].level !== r.to) changedWords.add(r.item.word);
+      item.senses[r.index].level = r.to;
+    }
+    if (!changedWords.size) {
+      done.textContent = '没有档位变化，未写盘';
+      done.className = 'save-state';
+      return;
+    }
+    const items = [...byWord.values()].filter((item) => changedWords.has(item.word));
+    commit.disabled = true;
+    done.textContent = '写入中…';
+    done.className = 'save-state';
+    try {
+      const out = await api('/api/level/commit', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      done.textContent = `已写回 ${out.changed} 个词${out.failed.length ? ` · 跳过 ${out.failed.length}` : ''}${out.backup ? ` · 备份 ${out.backup}` : ''}`;
+      toast(`档位已重定 ${out.changed} 个词${out.backup ? ` · 备份 ${out.backup}` : ''}`);
+      selected.clear();
+      await loadEntries();
+    } catch (e) {
+      commit.disabled = false;
+      done.textContent = `写入失败：${e.message}`;
+      done.className = 'save-state bad';
+    }
+  });
+}
+
+// 重构出的义项也要定档（D30）：模型只写释义与例句，档位逐条跑五次投票，带上参考档位。
+// 条目内分块并发（√n 一块）；定不出档位的那条留「待定」，并把这个词标成写不进。
+async function withLevels(item, onStep, signal) {
+  const model = $('#model').value;
+  const results = await inChunks(
+    item.senses,
+    async (sense) => {
+      try {
+        const out = await levelVote({
+          word: item.word,
+          definition: sense.definition,
+          example: sense.example,
+          model,
+        }, signal);
+        sense.level = out.level;
+        sense.vote = out;
+        sense.trace = out.trace;
+      } catch (e) {
+        sense.level = null;
+        sense.vote = null;
+        // 中止时 fetch 抛的是浏览器自己那句「signal is aborted without reason」，别原样端给用户。
+        sense.voteError = signal?.aborted ? '已终止，还没定档' : e.message;
+      }
+    },
+    (done, total) => onStep && onStep(done, total),
+    signal,
+  );
+  // 没轮到的那些义项一条票都没投（catch 都没进），别让下面把「五票无效」当成结论写出去。
+  for (let i = 0; i < results.length; i += 1) {
+    if (results[i].aborted && !item.senses[i].level) item.senses[i].voteError = '已终止，还没定档';
+  }
+  const missing = item.senses.findIndex((s) => !s.level);
+  if (missing >= 0) {
+    return {
+      ...item,
+      writeable: false,
+      error: { code: 'noLevel', message: `第 ${missing + 1} 条义项没定出档位：${item.senses[missing].voteError || '五票无效'}` },
+    };
+  }
+  // 定完档就按新档位重探一次写盘：服务端那份探测是拿占位档位做的，这里才是最终结论。
+  return { ...item, writeable: true, error: null };
+}
+
+// 正在跑的那一轮重构。点「终止」就是 abort 它：连接一关，服务端那边还没出结果的上游调用
+// 也跟着停（server.js 里按连接断开中止），界面立刻解冻。
+let refactorStop = null;
+// 有没有一条批量在跑（重构或复判投票）。批量按钮的可用状态按它算。
+let batchBusy = false;
+
 async function refactorSelection() {
   const words = [...selected];
   if (!words.length) return;
-  const btn = $('#refactorBtn');
+  const stop = $('#refactorStop');
+  const out = $('#refactorProgress');
+  batchBusy = true;
+  syncSelection();
+  stop.hidden = false;
+  stop.disabled = false;
+  const controller = new AbortController();
+  refactorStop = controller;
+  const results = await inChunks(
+    words,
+    async (word) => {
+      const proposal = await api('/api/refactor', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ word, model: $('#model').value }),
+        signal: controller.signal,
+      });
+      // 信号一路传进定档：一个词内部那几条义项也一起停，不留半截在跑。
+      return withLevels(proposal, null, controller.signal);
+    },
+    (n, total) => {
+      out.textContent = `重构并定档 ${n}/${total}…`;
+    },
+    controller.signal,
+  );
+  refactorStop = null;
+  batchBusy = false;
+  stop.hidden = true;
+  stop.disabled = false;
+  syncSelection();
+  // 被终止的那些不算失败，别拿它们刷红条：连着的请求本来就是我们自己掐的。
+  for (const r of results) {
+    if (!r.ok && !r.aborted) toast(`${r.item} 重构失败：${r.error.message}`, 'bad');
+  }
+  const items = results.filter((r) => r.ok).map((r) => r.value);
+  const stopped = results.some((r) => r.aborted);
+  // 被终止时正在定档的那几个词会带着「还没定档」回来：留着只会多出一行写不进去的红字，
+  // 重跑一次本来就得把它们整个重做，所以只留下定档完整的那些。
+  const shown = stopped ? items.filter((item) => item.writeable) : items;
+  out.textContent = stopped
+    ? `已终止 · 跑完 ${shown.length}/${words.length} 个词`
+    : items.length
+      ? `本轮完成 ${items.length}/${words.length}`
+      : '没有拿到任何建议';
+  // 哪怕一个词都没跑成也要画：不画的话上一轮那份清单会留在页面上，点「确认写入」写出去的是
+  // 过期的东西。
+  renderRefactorPanel(shown, { stopped });
+}
+
+async function levelPlan() {
+  const words = [...selected];
+  if (!words.length) return;
+  const btn = $('#levelBtn');
   const out = $('#refactorProgress');
   btn.disabled = true;
-  const items = [];
-  for (let i = 0; i < words.length; i++) {
-    out.textContent = `重构中 ${i + 1}/${words.length}：${words[i]}`;
-    try {
-      items.push(
-        await api('/api/refactor', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ word: words[i], model: $('#model').value }),
-        }),
-      );
-    } catch (e) {
-      toast(`${words[i]} 重构失败：${e.message}`, 'bad');
-    }
+  out.textContent = `查参考档位：${words.length} 个词…`;
+  try {
+    const res = await api('/api/level/plan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ words }),
+    });
+    out.textContent = res.missing.length ? `${res.missing.length} 个词在词表里查不到，已跳过` : '';
+    renderLevelPanel(res);
+  } catch (e) {
+    out.textContent = `读取失败：${e.message}`;
+  } finally {
+    btn.disabled = false;
   }
-  out.textContent = items.length ? `本轮完成 ${items.length}/${words.length}` : '没有拿到任何建议';
-  btn.disabled = false;
-  if (items.length) renderRefactorPanel(items);
 }
 
 $('#selectAll').addEventListener('change', (ev) => {
@@ -747,6 +1120,13 @@ $('#selectMode').addEventListener('click', () => setSelectionMode(!selectionMode
 $('#markChecked').addEventListener('click', () => markSelection(true));
 $('#markUnchecked').addEventListener('click', () => markSelection(false));
 $('#refactorBtn').addEventListener('click', refactorSelection);
+$('#levelBtn').addEventListener('click', levelPlan);
+$('#refactorStop').addEventListener('click', () => {
+  if (!refactorStop) return;
+  $('#refactorStop').disabled = true;
+  $('#refactorProgress').textContent = '正在终止…';
+  refactorStop.abort();
+});
 
 for (const id of ['#q', '#chapter', '#difficulty', '#mastery']) {
   $(id).addEventListener('input', renderList);

@@ -27,7 +27,6 @@
   --danger-soft: #fbefee;
   --danger-line: #e8c9c5;
   --warn: #8a6318;
-  --warn-soft: #fbf3e4;
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -71,7 +70,6 @@ html[data-theme="dark"] {
   --danger-soft: #2a1f1e;
   --danger-line: #5a3a37;
   --warn: #d6ab6a;
-  --warn-soft: #2a2418;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.5);
@@ -524,6 +522,31 @@ button:disabled {
   box-shadow: var(--shadow-1);
 }
 
+/* 抽词：滑块拖、数字框填，两者同步；数字用等宽字，拖动时那行提示不会自己抖 */
+.count-field input[type="range"] {
+  width: 118px;
+  vertical-align: middle;
+}
+
+.count-field .count-num {
+  width: 4.4em;
+  padding: 4px 6px;
+  text-align: center;
+}
+
+.count-field .count {
+  font-variant-numeric: tabular-nums;
+}
+
+.count-field .count b {
+  font-weight: 500;
+}
+
+.count-field .pool-note {
+  font-style: normal;
+  color: var(--fg-muted);
+}
+
 .toolbar + .list,
 .toolbar + .actionbar {
   margin-top: 10px;
@@ -834,10 +857,6 @@ button:disabled {
   flex: none;
 }
 
-.sense-basis {
-  margin-left: 80px;
-}
-
 .sense-actions {
   display: flex;
   align-items: center;
@@ -879,21 +898,12 @@ button:disabled {
   padding: 4px 0 2px 0;
 }
 
-.example-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--fg-muted);
-}
-
 .gen-example {
   color: var(--fg-muted);
   font-size: 12.5px;
 }
 
-/* ---- 自测 / 整测卡片 ---- */
+/* ---- 轮次卡片 ---- */
 .quiz-card {
   display: grid;
   gap: 12px;
@@ -910,7 +920,7 @@ button:disabled {
   font-size: 12.5px;
 }
 
-/* ---- 作答行：自测与整测的整词卡共用 ---- */
+/* ---- 作答行：学习、复习与「考这个词」共用 ---- */
 .answer-list {
   display: grid;
   gap: 10px;
@@ -923,16 +933,6 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-2);
-}
-
-.answer-row.focused {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-
-.answer-row.quiet {
-  background: none;
-  border-style: dashed;
 }
 
 .answer-head {
@@ -964,6 +964,12 @@ button:disabled {
 
 .answer-input {
   width: 100%;
+}
+
+/* 例句输入框是可选的，样式比释义那格轻一档 */
+.answer-example-input {
+  width: 100%;
+  font-size: 12.5px;
 }
 
 .answer-result {
@@ -1009,7 +1015,7 @@ button:disabled {
   padding-top: 8px;
 }
 
-/* ---- 结果清单（重构建议、整测结算） ---- */
+/* ---- 结果清单（重构建议、轮次结算） ---- */
 .job-result {
   margin-top: 12px;
   padding: 12px 14px;
@@ -1052,6 +1058,144 @@ button:disabled {
 .refactor-pick {
   margin-right: 6px;
   flex: none;
+}
+
+/* 档位复判清单复用重构面板的 li/preview 版式，这里只剩标题那行要压一下字号 */
+.preview > li > strong {
+  min-width: 9em;
+}
+
+/* ---- 定档依据方块（加词 / 词表共用，level-card.js）---- */
+.level-card {
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.level-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.level-head:hover {
+  color: var(--accent);
+}
+
+.level-caret {
+  flex: none;
+  font-style: normal;
+  font-size: 10px;
+  transition: transform 0.12s ease;
+}
+
+.level-card.open .level-caret {
+  transform: rotate(90deg);
+}
+
+.level-summary {
+  flex: 1 1 auto;
+}
+
+.level-body {
+  display: grid;
+  gap: 5px;
+  padding: 6px 8px 8px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.level-body.bad .step-box.verdict {
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.step-boxes {
+  display: grid;
+  gap: 4px;
+}
+
+.step-box {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+
+.step-box b {
+  flex: none;
+  min-width: 5.6em;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+/* 详情里是长句（表名 + 词性 + 档位），flex 子项默认不肯缩到 min-content 以下，
+   不写这两行窄屏会被它顶出横向滚动条。 */
+.step-box span,
+.level-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.step-box.verdict {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.vote-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.vote-row b {
+  flex: none;
+  min-width: 5.6em;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.vote-boxes {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.vote-box {
+  min-width: 2.5em;
+  padding: 1px 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-style: normal;
+  text-align: center;
+}
+
+.vote-box.empty,
+.vote-none {
+  color: var(--fg-muted);
+  border-style: dashed;
+}
+
+.vote-none {
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  font-size: 12px;
 }
 
 /* ---- 设置 ---- */
@@ -1248,15 +1392,29 @@ button:disabled {
   .topbar h1 {
     display: none;
   }
+
+  /* 抽词那格现在最长：数字框已经显示着抽几个，把右边那截文字整个让出去 */
+  .count-field .count {
+    display: none;
+  }
 }
 
 @media (max-width: 340px) {
   .topbar {
-    padding: 10px 10px;
+    padding: 10px 6px;
   }
 
   /* 只留下拉，把「模型」两个字收起来，省下三十来像素 */
   .topbar-tools .field-label {
     display: none;
+  }
+
+  /* 顶栏这时刚好差几像素：按钮左右收紧、间距也压一档，够它一行放下 */
+  .topbar-tools {
+    gap: 4px;
+  }
+
+  .topbar-tools .btn {
+    padding-inline: 7px;
   }
 }

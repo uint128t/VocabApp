@@ -1,17 +1,23 @@
 // 义项相关的公共零件：档位下拉、编辑行、答题目用的义项行、义项小标签。
-// 词表、加词、自测、整测四个面板都从这里取。
+// 词表、加词、学习、复习四个面板都从这里取。
 
-import { $, CEFR, api, text } from './core.js';
+import { $, CEFR, api } from './core.js';
+import { levelCard } from './level-card.js';
 
 function levelSelect(current) {
   const sel = document.createElement('select');
+  // 档位由五次投票定；还没投票时留一个空的「待定」，别假装有个档位。
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = '待定';
+  sel.append(blank);
   for (const level of CEFR) {
     const o = document.createElement('option');
     o.value = level;
     o.textContent = level;
     sel.append(o);
   }
-  sel.value = current && CEFR.includes(current) ? current : CEFR[2];
+  sel.value = current && CEFR.includes(current) ? current : '';
   return sel;
 }
 
@@ -77,28 +83,56 @@ function senseRow(entry, sense, { withCheck = false } = {}) {
   drop.textContent = '删除';
   drop.addEventListener('click', () => wrap.remove());
 
-  const basis = document.createElement('div');
-  basis.className = 'hint sense-basis';
+  // 档位依据是可展开的方块（加词与词表共用）：这里只按传进来的数据画一次，
+  // 定档回来之后再 update 一次。
+  const card = levelCard({ level: sense.level || null, vote: sense.vote || null, trace: sense.trace || null });
+  if (sense.voteError) card.api.update({ error: sense.voteError });
 
-  row.api = { level, def, ex, zh, basis, check };
+  row.api = { level, def, ex, zh, card, check };
   if (check) row.append(check);
   row.append(level, def, ex, zh, gen, drop, out);
-  wrap.append(row, basis);
+  wrap.append(row, card);
   wrap.api = row.api;
   return wrap;
 }
 
-function relatedLabel(rel) {
-  return `${rel.form}（${rel.via === 'root' ? '词根推测' : '词形归并'}） ${rel.level} · ${rel.source}`;
+// 参考档位按来源去重：同一个来源在表里按词性各有一条（CEFR-J 名词 A2、CEFR-J 动词 B1），
+// 逐条列出来能占掉一整行。取每个来源的平词条目（数据里的「该来源最低档」），没有就取最低的那条。
+function levelSourceLine(referenceLevels) {
+  const bySource = new Map();
+  for (const item of referenceLevels?.levels || []) {
+    const held = bySource.get(item.source);
+    if (!held || (held.pos && !item.pos)) {
+      bySource.set(item.source, item);
+      continue;
+    }
+    if (held.pos && item.pos && CEFR.indexOf(item.level) < CEFR.indexOf(held.level)) bySource.set(item.source, item);
+  }
+  return [...bySource.values()].map((l) => `${l.source} ${l.level}`);
 }
 
-function senseBasisNote(sense, referenceLevels) {
-  const refs = (referenceLevels?.levels || []).map((l) => `${l.source}${l.pos ? ` ${l.pos}` : ''} ${l.level}`);
-  for (const rel of referenceLevels?.related || []) {
-    refs.push(relatedLabel(rel));
-  }
-  if (sense.levelBasis === 'reference') return `查表定档：${refs.join(' · ') || '参考词表'}`;
-  return refs.length ? `AI 判断（参考：${refs.join(' · ')}）` : 'AI 判断（词表未收录）';
+// 给一条义项定档：服务端跑五次取平均。加词草稿与重构预览都走它。
+// signal 是「终止」用的：传进去之后，连接一关服务端那边的五次调用也跟着停。
+function levelVote(payload, signal) {
+  return api('/api/level/vote', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+// 定完档把结果填回那一行的档位下拉与依据方块。
+async function voteSense(row, { word, model }, signal) {
+  const out = await levelVote({
+    word,
+    definition: row.api.def.value.trim(),
+    example: row.api.ex.value.trim(),
+    model,
+  }, signal);
+  row.api.level.value = out.level;
+  row.api.card.api.update({ level: out.level, vote: out, trace: out.trace });
+  return out;
 }
 
 function readSenses(list) {
@@ -111,11 +145,6 @@ function readSenses(list) {
   }));
 }
 
-function firstOpenSense(entry) {
-  const i = entry.senses.findIndex((s) => !s.checked);
-  return i < 0 ? 0 : i;
-}
-
 function levelTag(level) {
   const tag = document.createElement('span');
   tag.className = 'tag';
@@ -124,10 +153,11 @@ function levelTag(level) {
   return tag;
 }
 
-// 自测与整测共用的一行：抬头是义项编号、档位和例句，下面是作答输入框与判定结果。
-function answerRow({ label, level, example, focused, quiet, note }) {
+// 学习、复习与词表的「考这个词」共用的一行：抬头是义项编号、档位和该义项的例句，
+// 下面两个输入框——英文释义，和可选的一句例句（填了才判，判不过会影响 pass）。
+function answerRow({ label, level, example }) {
   const row = document.createElement('div');
-  row.className = text('answer-row', focused && 'focused', quiet && 'quiet');
+  row.className = 'answer-row';
 
   const head = document.createElement('div');
   head.className = 'answer-head';
@@ -147,21 +177,28 @@ function answerRow({ label, level, example, focused, quiet, note }) {
   input.autocomplete = 'off';
   input.spellcheck = false;
 
+  const exampleInput = document.createElement('input');
+  exampleInput.type = 'text';
+  exampleInput.className = 'answer-example-input';
+  exampleInput.placeholder = '可选：用这个词造一句';
+  exampleInput.autocomplete = 'off';
+  exampleInput.spellcheck = false;
+
   const result = document.createElement('div');
   result.className = 'answer-result';
   result.hidden = true;
 
-  row.append(head);
-  if (note) {
-    const flag = document.createElement('span');
-    flag.className = 'answer-flag';
-    flag.textContent = note;
-    row.append(flag);
-  }
-  if (!quiet) row.append(input);
-  row.append(result);
-  row.api = { row, input, result, head, ex };
+  row.append(head, input, exampleInput, result);
+  row.api = { row, input, exampleInput, result, head, ex };
   return row;
 }
 
-export { levelTag, senseRow, relatedLabel, senseBasisNote, readSenses, firstOpenSense, answerRow };
+export {
+  levelTag,
+  senseRow,
+  levelSourceLine,
+  readSenses,
+  answerRow,
+  levelVote,
+  voteSense,
+};

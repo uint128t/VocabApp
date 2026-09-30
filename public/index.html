@@ -24,8 +24,8 @@
         <nav class="nav">
           <button class="nav-item active" type="button" data-panel="add"><span>加词</span><small>AI 出义项草稿</small></button>
           <button class="nav-item" type="button" data-panel="fill"><span>词表</span><small>全表与掌握状态</small></button>
-          <button class="nav-item" type="button" data-panel="learn"><span>学习</span><small>先看 10 个生词再测</small></button>
-          <button class="nav-item" type="button" data-panel="review"><span>复习</span><small>抽 30 个熟词复查</small></button>
+          <button class="nav-item" type="button" data-panel="learn"><span>学习</span><small>先看一遍生词再测</small></button>
+          <button class="nav-item" type="button" data-panel="review"><span>复习</span><small>抽一批熟词复查</small></button>
           <button class="nav-item" type="button" data-panel="settings"><span>设置</span><small>模型 · 提示词 · 主题</small></button>
         </nav>
 
@@ -50,6 +50,7 @@
               <div class="toolbar">
                 <label class="check"><input id="withChinese" type="checkbox" /> 附中文释义</label>
                 <button id="draftBtn" class="btn primary" type="button">生成草稿</button>
+                <button id="draftStop" class="btn ghost" type="button" hidden>终止</button>
                 <button id="commitAll" class="btn" type="button">写入全部</button>
                 <button id="clearCards" class="btn ghost" type="button">清空卡片</button>
                 <span id="addHint" class="count"></span>
@@ -80,10 +81,13 @@
               <button id="markChecked" class="btn" type="button" disabled>标记为已掌握</button>
               <button id="markUnchecked" class="btn" type="button" disabled>标记为未掌握</button>
               <button id="refactorBtn" class="btn" type="button" disabled>重构选中的词</button>
+              <button id="refactorStop" class="btn ghost" type="button" hidden>终止</button>
+              <button id="levelBtn" class="btn" type="button" disabled>重定档位</button>
               <button id="clearSelection" class="btn ghost" type="button">清空选择</button>
               <span id="refactorProgress" class="save-state"></span>
             </div>
             <div id="refactorPanel" class="job-result" hidden></div>
+            <div id="levelPanel" class="job-result" hidden></div>
             <ul id="list" class="list"></ul>
           </section>
 
@@ -91,6 +95,11 @@
             <div class="toolbar">
               <label class="inline-field">反馈语言
                 <select id="learnLang"><option value="zh">中文</option><option value="en">English</option></select>
+              </label>
+              <label class="inline-field count-field">抽词
+                <input id="learnCount" type="range" min="1" max="50" step="1" value="10" />
+                <input id="learnCountNum" class="count-num" type="number" min="1" step="1" value="10" />
+                <span class="count"><b id="learnCountText"></b><i class="pool-note" id="learnCountPool"></i></span>
               </label>
               <span id="learnProgress" class="count"></span>
               <span class="spacer"></span>
@@ -100,7 +109,7 @@
               <button id="learnRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
               <button id="learnAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
             </div>
-            <p class="hint">抽 10 个还有义项没掌握的词：先一个一个把整词的义项与例句看一遍，看完再闭卷测这一轮，通过的义项进结算清单。</p>
+            <p class="hint">从「还有义项没掌握」的词里抽一批（数量看上面的滑块）：先一个一个把整词的义项与例句看一遍，看完再闭卷测这一轮，通过的义项进结算清单。</p>
             <div id="learnCard" class="quiz-card" hidden></div>
             <div id="learnFeedback" class="job-result" hidden></div>
             <div id="learnResult" class="job-result" hidden></div>
@@ -111,6 +120,11 @@
               <label class="inline-field">反馈语言
                 <select id="reviewLang"><option value="zh">中文</option><option value="en">English</option></select>
               </label>
+              <label class="inline-field count-field">抽词
+                <input id="reviewCount" type="range" min="1" max="50" step="1" value="30" />
+                <input id="reviewCountNum" class="count-num" type="number" min="1" step="1" value="30" />
+                <span class="count"><b id="reviewCountText"></b><i class="pool-note" id="reviewCountPool"></i></span>
+              </label>
               <span id="reviewProgress" class="count"></span>
               <span class="spacer"></span>
               <button id="reviewStart" class="btn primary" type="button">开始复习</button>
@@ -119,7 +133,7 @@
               <button id="reviewRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
               <button id="reviewAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
             </div>
-            <p class="hint">抽 30 个整词已掌握的词直接闭卷测，没通过的义项进结算清单等你取消勾选。</p>
+            <p class="hint">从「整词已掌握」的词里抽一批（数量看上面的滑块）直接闭卷测，没通过的义项进结算清单等你取消勾选。</p>
             <div id="reviewCard" class="quiz-card" hidden></div>
             <div id="reviewFeedback" class="job-result" hidden></div>
             <div id="reviewResult" class="job-result" hidden></div>
@@ -181,7 +195,7 @@
                 </div>
                 <p class="hint">
                   模型全部平级地保存在 <code>settings.json</code>（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数，
-                  没有 .env 默认接入点。<code>.env</code> 只放密钥、<code>VOCAB_FILE</code> 和 <code>PORT</code>：
+                  没有 .env 默认接入点。<code>.env</code> 只放密钥与 <code>PORT</code>：
                   每把密钥用 <code>VOCAB_KEY_名字=…</code> 声明，界面只选名字、不读取也不写入密钥值。改了
                   <code>.env</code> 要重启服务才会生效。
                 </p>
@@ -196,7 +210,7 @@
                   <button type="button" class="btn ghost reset-prompt" data-prompt="entry">恢复默认</button>
                   <code class="contract" id="contractEntry"></code>
                 </div>
-                <label class="stack">自测判定
+                <label class="stack">判定（词表的「考这个词」与学习 / 复习共用）
                   <textarea id="promptJudge" rows="4"></textarea>
                 </label>
                 <div class="row">

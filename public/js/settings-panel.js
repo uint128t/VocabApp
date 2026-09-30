@@ -65,6 +65,14 @@ export function setVocabFileReload(fn) {
   vocabFileReload = fn;
 }
 
+// 保存设置后要让学习/复习那两个面板重新对一遍（反馈语言的默认值、可抽数量的上限）。
+// 同 setVocabFileReload：由入口把刷新函数接进来，免得 settings-panel 反过来 import 面板。
+let panelsReload = null;
+
+export function setPanelsReload(fn) {
+  panelsReload = fn;
+}
+
 async function saveSettings(patch, notice) {
   const before = settings ? settings.vocabFile : null;
   setSaveState('保存中…');
@@ -82,6 +90,7 @@ async function saveSettings(patch, notice) {
     setSaveState(`已保存 ${new Date().toLocaleTimeString()}`);
     if (notice) toast(notice);
     if (switched && vocabFileReload) await vocabFileReload();
+    if (panelsReload) await panelsReload();
     return true;
   } catch (e) {
     setSaveState(`保存失败：${e.message}`, true);
@@ -91,8 +100,6 @@ async function saveSettings(patch, notice) {
 }
 
 function syncSettingDefaults() {
-  $('#learnLang').value = settings.lang;
-  $('#reviewLang').value = settings.lang;
   $('#setTheme').value = settings.theme;
   $('#setLang').value = settings.lang;
   fillSelect($('#model'), availableModels, settings.model || $('#model').value);
@@ -103,7 +110,7 @@ function syncSettingDefaults() {
 function renderModelChips() {
   const box = $('#modelList');
   box.innerHTML = '';
-  // 默认模型上面那个下拉已经写着，这里不再重复一遍；只有候选为空时给一句提示。
+  // 这里只列候选，默认模型看上面那个下拉；候选为空时给一句提示。
   if (!settings.extraModels.length) {
     const label = document.createElement('span');
     label.className = 'hint';
@@ -197,7 +204,13 @@ async function openConfigFile(which) {
 }
 
 $('#themeBtn').addEventListener('click', cycleTheme);
-$('#saveSettings').addEventListener('click', () => saveSettings(settingsFromForm(), '设置已保存'));
+$('#saveSettings').addEventListener('click', () => {
+  if (!settings) {
+    toast('设置还没读出来，先点右上角「重新读取」', 'bad');
+    return;
+  }
+  saveSettings(settingsFromForm(), '设置已保存');
+});
 $('#resetSettings').addEventListener('click', () =>
   saveSettings(
     { model: null, extraModels: [], lang: 'zh', theme: 'auto', prompts: { entry: null, judge: null } },

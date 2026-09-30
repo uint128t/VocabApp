@@ -19,6 +19,43 @@ async function api(path, init) {
   return body;
 }
 
+// 分块并发：n 个活分成 ceil(√n) 一块，块内并行、块间串行。定档与重构都要跑几十上百个
+// 模型调用，全串行太慢、全并发会把上游打爆，所以按 √n 一块推进。
+//
+// 第四个参数是可选的 signal（界面上那颗「终止」）：块与块之间看它一眼，已经中止就不开新块，
+// 没轮到的那些标成 aborted 原样留在结果里；已经开跑的那一块连 fetch 一起被中止（worker 里
+// 要把同一个 signal 交给 api()）。调用方据此写「还剩几条」而不是把中止当成失败。
+async function inChunks(items, worker, onProgress, signal) {
+  const list = [...items];
+  const size = Math.max(1, Math.ceil(Math.sqrt(list.length)));
+  const results = new Array(list.length);
+  const abortedSlot = (item) => {
+    const e = new Error('已终止');
+    e.aborted = true;
+    return { ok: false, error: e, item, aborted: true };
+  };
+  let done = 0;
+  for (let i = 0; i < list.length; i += size) {
+    if (signal?.aborted) {
+      for (let k = i; k < list.length; k += 1) results[k] = abortedSlot(list[k]);
+      break;
+    }
+    await Promise.all(
+      list.slice(i, i + size).map(async (item, k) => {
+        try {
+          results[i + k] = { ok: true, value: await worker(item, i + k), item };
+        } catch (error) {
+          results[i + k] = { ok: false, error, item, aborted: Boolean(signal?.aborted) };
+        } finally {
+          done += 1;
+          if (onProgress) onProgress(done, list.length, item);
+        }
+      }),
+    );
+  }
+  return results;
+}
+
 let toastTimer;
 function toast(message, kind = 'ok') {
   const el = $('#toast');
@@ -64,4 +101,4 @@ for (const tab of document.querySelectorAll('.nav-item')) {
   tab.addEventListener('click', () => activateTab(tab.dataset.panel));
 }
 
-export { $, CEFR, state, api, toast, text, fillSelect, activateTab };
+export { $, CEFR, state, api, toast, text, fillSelect, activateTab, inChunks };

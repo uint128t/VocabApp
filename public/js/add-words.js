@@ -1,7 +1,7 @@
 // 加词面板：粘贴一批词 → 逐词出卡 → 校对后写入。
 
-import { $, api, toast, activateTab } from './core.js';
-import { senseRow, readSenses, senseBasisNote } from './sense-ui.js';
+import { $, api, toast, activateTab, inChunks } from './core.js';
+import { senseRow, readSenses, voteSense } from './sense-ui.js';
 import { renderList, loadEntries } from './vocab-list.js';
 
 function parseWords(text) {
@@ -67,30 +67,68 @@ function makeCard(word) {
   return card;
 }
 
-function applyDraft(card, d) {
+// 定完档返回 true；中途被终止返回 false —— 这张卡是半截的，调用方整张丢掉。
+async function applyDraft(card, d, signal) {
   const a = card.api;
   a.sensesBox.innerHTML = '';
+  const rows = [];
   for (const sense of d.senses || []) {
-    const row = senseRow({ word: a.word }, sense);
-    row.api.basis.textContent = senseBasisNote(sense, d.referenceLevels);
+    // trace 挂在每条义项上，依据方块一建出来就能展开看逐步命中（那时还没投票）。
+    const row = senseRow({ word: a.word }, { ...sense, trace: d.trace });
     a.sensesBox.append(row);
+    rows.push(row);
   }
   a.note.textContent = d.note || '';
+  // 档位不在这张卡里由模型定（D30）：逐条跑五次投票，带上查表命中的那些参考。
+  // 分块并发（√n 一块），进度行写清；失败的那条留「待定」等手动选。
+  await inChunks(
+    rows,
+    async (row) => {
+      try {
+        await voteSense(row, { word: a.word, model: $('#model').value }, signal);
+      } catch (e) {
+        // 被终止的不写失败原因：这张卡马上要被丢掉。
+        if (signal?.aborted) return;
+        row.api.card.api.update({ error: e.message });
+      }
+    },
+    (done, total) => {
+      a.status.textContent = total > 1 ? `定档中 ${done}/${total}…` : '定档中…';
+    },
+    signal,
+  );
+  if (signal?.aborted) return false;
   a.status.textContent = '';
   card.classList.remove('loading');
+  return true;
 }
+
+// 正在跑的那一轮生成草稿（出义项 + 逐条定档）。点「终止」就是 abort 它：连接一关，
+// 服务端那边还没出结果的上游调用也跟着停（server.js 按连接断开中止）。
+let draftAbort = null;
+// 「清空卡片」顺手把这一轮也取消了：收尾那句「已终止 · 生成 N 张」就别再写回空面板上。
+let draftCleared = false;
 
 async function draftWords() {
   const words = parseWords($('#words').value);
   const existing = new Set([...document.querySelectorAll('#cards .card')].map((c) => c.api.word.toLowerCase()));
   const fresh = words.filter((w) => !existing.has(w.toLowerCase()));
-  $('#addHint').textContent = `${fresh.length} 个待生成${words.length - fresh.length ? `，${words.length - fresh.length} 个已有卡片` : ''}`;
+  const hint = $('#addHint');
+  hint.textContent = `${fresh.length} 个待生成${words.length - fresh.length ? `，${words.length - fresh.length} 个已有卡片` : ''}`;
   if (!fresh.length) return;
 
   const btn = $('#draftBtn');
+  const stop = $('#draftStop');
   btn.disabled = true;
+  stop.hidden = false;
+  stop.disabled = false;
+  const controller = new AbortController();
+  draftAbort = controller;
+  draftCleared = false;
+  let made = 0;
   try {
     for (const word of fresh) {
+      if (controller.signal.aborted) break;
       const card = makeCard(word);
       $('#cards').append(card);
       try {
@@ -98,16 +136,32 @@ async function draftWords() {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ word, withChinese: $('#withChinese').checked, model: $('#model').value }),
+          signal: controller.signal,
         });
-        applyDraft(card, d);
+        // 半截的卡（义项齐、档位不齐）整张丢掉：重跑一次本来就整个重做，留着只会逼你
+        // 手动去补剩下的档位。词还在输入框里，再点一次「生成草稿」会跳过已有的接着做。
+        if (await applyDraft(card, d, controller.signal)) made += 1;
+        else {
+          card.remove();
+          break;
+        }
       } catch (e) {
+        if (controller.signal.aborted) {
+          card.remove();
+          break;
+        }
         card.classList.remove('loading');
         card.classList.add('bad');
         card.api.status.textContent = `生成失败：${e.message}`;
       }
     }
   } finally {
+    draftAbort = null;
+    stop.hidden = true;
     btn.disabled = false;
+    if (controller.signal.aborted && !draftCleared) {
+      hint.textContent = `已终止 · 生成 ${made} 张，还剩 ${fresh.length - made} 个词`;
+    }
   }
 }
 
@@ -131,6 +185,12 @@ async function commitCard(card, quiet) {
   if (empty >= 0) {
     a.status.textContent = `第 ${empty + 1} 条义项缺释义`;
     return `第 ${empty + 1} 条义项缺释义`;
+  }
+  // 档位是五票定出来的（D30），没定出来就别写：先手动选一个，或者等定档成功再存。
+  const noLevel = senses.findIndex((s) => !s.level);
+  if (noLevel >= 0) {
+    a.status.textContent = `第 ${noLevel + 1} 条义项还没定档，先选一个或重跑定档`;
+    return `第 ${noLevel + 1} 条义项还没定档`;
   }
 
   a.write.disabled = true;
@@ -192,8 +252,19 @@ function locateWord(word) {
 }
 
 $('#draftBtn').addEventListener('click', draftWords);
+$('#draftStop').addEventListener('click', () => {
+  if (!draftAbort) return;
+  $('#draftStop').disabled = true;
+  $('#addHint').textContent = '正在终止…';
+  draftAbort.abort();
+});
 $('#commitAll').addEventListener('click', commitAllCards);
 $('#clearCards').addEventListener('click', () => {
+  // 清空时正在跑的那一轮也得停，不然卡片会一张张重新长回来。
+  if (draftAbort) {
+    draftCleared = true;
+    draftAbort.abort();
+  }
   $('#cards').innerHTML = '';
   $('#addHint').textContent = '';
 });

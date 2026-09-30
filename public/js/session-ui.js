@@ -2,18 +2,30 @@
 // 两个面板的 DOM 只差元素前缀（learn / review），版式与交互完全一样，
 // 所以这里按前缀取元素、按 mode 决定这轮属于谁。面板模块自己挂工具栏的监听。
 
-import { $, api, toast } from './core.js';
+// state 在这里改名引入：下面几个渲染函数都把「本轮状态」当参数叫 state，同名会把它遮住。
+import { $, api, toast, state as listState } from './core.js';
 import { answerRow, levelTag } from './sense-ui.js';
 import { loadEntries } from './vocab-list.js';
+import { settings } from './settings-panel.js';
 
-const REFS = ['Start', 'Pause', 'Resume', 'Abort', 'Restart', 'Lang', 'Progress', 'Card', 'Feedback', 'Result'];
+const REFS = ['Start', 'Pause', 'Resume', 'Abort', 'Restart', 'Lang', 'Count', 'CountNum', 'CountText', 'CountPool', 'Progress', 'Card', 'Feedback', 'Result'];
 
-// 判定反馈的固定代码翻成人话，按本轮语言选一套。
+// 滑块没给过值时按模式取默认；给过的值记在 localStorage 里，刷新页面不会跳回 10/30。
+const DEFAULT_COUNT = { learn: 10, review: 30 };
+
+const readCount = (key, fallback) => {
+  const saved = Number(localStorage.getItem(key));
+  return Number.isInteger(saved) && saved >= 1 ? saved : fallback;
+};
+
+// 判定反馈的固定代码翻成人话，按本轮语言选一套。模型写得出安全点评时，点评会另起一行
+// 跟在后面；`unspecified` 那句笼统话在有点评时撤掉，省得两句互相打架。
 const REASON_TEXT = {
   zh: {
     ok: '释义到位',
     'sense-off': '义项跑偏了，再想想这个词的核心意思',
     'word-not-used': '句子里没真正用到这个词',
+    'example-off': '例句体现的是另一个意思',
     'wrong-pos': '词性用错了',
     spelling: '词形拼得不对',
     partial: '方向对，但没说清核心义',
@@ -23,6 +35,7 @@ const REASON_TEXT = {
     ok: 'the definition is on target',
     'sense-off': 'the sense is off — think again about the core meaning',
     'word-not-used': 'the word is not actually used',
+    'example-off': 'the example shows a different meaning',
     'wrong-pos': 'wrong part of speech',
     spelling: 'the word form is misspelled',
     partial: 'close, but the core sense is missing',
@@ -37,7 +50,65 @@ const mounted = [];
 const refreshAll = (note, typed) => Promise.all(mounted.map((m) => m.refresh(note, typed)));
 
 export function mountRound({ prefix, mode }) {
-  const r = Object.fromEntries(REFS.map((name) => [name.toLowerCase(), $(`#${prefix}${name}`)]));
+  // 键名只把首字母变小写（CountText → countText）。整段小写会把多词的名字变成 counttext，
+  // 用 r.countText 取到的就是 undefined，而且要等到某个渲染分支才炸。
+  const ref = (name) => {
+    const el = $(`#${prefix}${name}`);
+    if (!el) throw new Error(`轮次面板缺元素：#${prefix}${name}`);
+    return el;
+  };
+  const r = Object.fromEntries(REFS.map((name) => [name[0].toLowerCase() + name.slice(1), ref(name)]));
+  const countKey = `vocab-count-${mode}`;
+
+  // 抽词滑块：上限跟着池子走（学习抽「还有义项没掌握」的，复习抽「整词已掌握」的），
+  // 池子不足时浏览器自己把滑块夹在上限上，服务端那边也会再截一次。
+  function poolSize() {
+    const want = mode === 'review';
+    return listState.entries.filter((e) => Boolean(e.checked) === want).length;
+  }
+
+  // 数字与「可抽 N」分成两个节点：窄屏可以只把后半截藏掉，数字留下来。
+  function setCountText(value, pool) {
+    r.countText.textContent = pool ? `${value} 个` : '池子是空的';
+    r.countPool.textContent = pool ? `（可抽 ${pool}）` : '';
+  }
+
+  // 滑块与数字框是同一个值的两种输入：拖动同步数字框，填数字同步滑块，两边都落盘。
+  // 越界的数字在这里夹到 1–池子 之间（填得比池子大就是想全抽，夹上去比弹回去好懂）。
+  function applyCount(raw) {
+    const max = Math.max(1, poolSize());
+    if (!Number.isFinite(raw)) return false;
+    const value = Math.min(Math.max(Math.round(raw), 1), max);
+    r.count.value = String(value);
+    r.countNum.value = String(value);
+    localStorage.setItem(countKey, String(value));
+    setCountText(value, poolSize());
+    return true;
+  }
+
+  function syncCount() {
+    const pool = poolSize();
+    const max = Math.max(1, pool);
+    const value = Math.min(readCount(countKey, DEFAULT_COUNT[mode]), max);
+    r.count.max = String(max);
+    r.countNum.max = String(max);
+    r.count.value = String(value);
+    r.countNum.value = String(value);
+    setCountText(value, pool);
+    return value;
+  }
+
+  r.count.addEventListener('input', () => applyCount(Number(r.count.value)));
+  r.countNum.addEventListener('input', () => {
+    // 正在删旧值重打的时候框是空的，这时别动滑块，等他打完或者失焦。
+    if (r.countNum.value.trim() === '') return;
+    applyCount(Number(r.countNum.value));
+  });
+  r.countNum.addEventListener('change', () => {
+    // 填了非数字或空着离开：回填当前有效值，别把一个坏值留在框里。
+    if (!r.countNum.value.trim() || !Number.isFinite(Number(r.countNum.value))) syncCount();
+    else applyCount(Number(r.countNum.value));
+  });
 
   function renderFeedback(note) {
     const box = r.feedback;
@@ -62,7 +133,17 @@ export function mountRound({ prefix, mode }) {
     const done = `已判 ${plan.judged}/${plan.total} 条义项`;
     const tail = state.status === 'paused' ? ' · 已暂停' : state.status === 'settled' ? ' · 已结算' : state.status === 'running' ? '' : ' · 已放弃';
     if (state.mode !== mode) {
-      r.progress.textContent = `${MODE_LABEL[state.mode]}模式的那一轮还没结束（${done}），去「${MODE_LABEL[state.mode]}」面板接着做`;
+      // 只有那一轮还在跑才在这里提醒；已结算/已放弃的轮次归它自己的面板，别在另一个面板上
+      // 一直挂着一句「还没结束」。整轮都判完了就说去结算，别再说「接着做」。
+      if (state.status !== 'running' && state.status !== 'paused') {
+        r.progress.textContent = '';
+        return;
+      }
+      const label = MODE_LABEL[state.mode];
+      r.progress.textContent =
+        plan.total > 0 && plan.judged === plan.total
+          ? `${label}模式的那一轮已经判完（${done}），去「${label}」面板结算`
+          : `${label}模式的那一轮${state.status === 'paused' ? '还暂停着' : '还没结束'}（${done}），去「${label}」面板接着做`;
       return;
     }
     const where = study ? ` · 看第 ${study.index + 1}/${study.total} 个词` : current ? ` · 第 ${current.index + 1}/${current.total} 个词` : '';
@@ -79,8 +160,10 @@ export function mountRound({ prefix, mode }) {
     r.resume.hidden = !paused;
     r.abort.hidden = !running && !paused;
     r.restart.hidden = !running && !paused;
-    // 本轮的语言以服务端记的为准；没有本轮时保留下拉里选的值（初值来自设置）。
+    // 本轮的语言以服务端记的为准；没有本轮时回到设置里的默认值。这一格归这个面板管——
+    // 设置页保存后只负责触发刷新，不直接改它，否则会把这轮正用着的语言悄悄换掉。
     if (state && mine) r.lang.value = state.lang;
+    else if (settings) r.lang.value = settings.lang;
   }
 
   // 看词段：整词的义项与例句摊开，一次一个词。
@@ -156,7 +239,7 @@ export function mountRound({ prefix, mode }) {
   }
 
   // 测试段：一个词一张卡，闭卷写英文释义。
-  async function renderCard(state, current, typed) {
+  async function renderCard(state, current, typed, seq) {
     const lang = r.lang.value === 'en' ? 'en' : 'zh';
     // 一条义项都还没判出来时后端会挡（闭卷，不给看表内释义），所以干脆不问。
     const answers = current.senses.some((s) => s.result)
@@ -213,9 +296,11 @@ export function mountRound({ prefix, mode }) {
 
       if (sense.result) {
         row.api.input.remove();
+        row.api.exampleInput.remove();
         const badge = document.createElement('span');
         badge.className = `badge ${sense.result === 'pass' ? 'pass' : 'fail'}`;
-        badge.textContent = sense.result === 'pass' ? 'PASS' : sense.via === 'skip' ? '不会' : sense.via === 'none' ? '不会（留空）' : 'FAIL';
+        // 徽章只说结论，「怎么算出来的」留给下面那行理由（你标记为不会 / 这条留空）。
+        badge.textContent = sense.result === 'pass' ? 'PASS' : 'FAIL';
         row.api.head.append(badge);
       } else {
         if (sense.attempts) {
@@ -231,7 +316,9 @@ export function mountRound({ prefix, mode }) {
         btn.addEventListener('click', () => giveUp(i));
         row.api.head.append(btn);
         row.api.input.dataset.sense = String(i);
-        row.api.input.value = typed[i] ?? '';
+        row.api.exampleInput.dataset.sense = String(i);
+        row.api.input.value = typed[i]?.def ?? '';
+        row.api.exampleInput.value = typed[i]?.example ?? '';
       }
 
       if (sense.result || sense.reason) {
@@ -243,13 +330,21 @@ export function mountRound({ prefix, mode }) {
         badge.className = 'badge';
         badge.textContent = sense.result ? (sense.result === 'pass' ? 'PASS' : 'FAIL') : '再试一次';
         const reason = document.createElement('p');
+        const fixed = sense.reason ? REASON_TEXT[lang][sense.reason] || REASON_TEXT[lang].unspecified : null;
         reason.textContent = [
           sense.via === 'skip' ? '你标记为不会' : sense.via === 'none' ? '这条留空，记为不会' : null,
-          sense.reason ? REASON_TEXT[lang][sense.reason] || REASON_TEXT[lang].unspecified : null,
+          sense.reason === 'unspecified' && sense.suggestion ? null : fixed,
         ]
           .filter(Boolean)
           .join(' · ');
-        box.append(badge, reason);
+        box.append(badge);
+        if (reason.textContent) box.append(reason);
+        if (sense.suggestion) {
+          const sug = document.createElement('p');
+          sug.className = 'suggestion';
+          sug.textContent = `点评：${sense.suggestion}`;
+          box.append(sug);
+        }
         if (shown) {
           const stored = document.createElement('p');
           stored.className = 'stored';
@@ -286,12 +381,18 @@ export function mountRound({ prefix, mode }) {
     const actions = document.createElement('div');
     actions.className = 'card-actions';
     actions.append(next, submit);
+    // 等 reveal 的这段时间里可能又刷新过一次（清空 + 重新渲染），那这张卡就作废了。
+    if (seq !== renderSeq) return;
     r.card.append(head, hint, list, actions);
 
     submit.addEventListener('click', async () => {
       const payload = rows
         .filter((row) => row.api.input && row.api.input.isConnected)
-        .map((row) => ({ sense: row.api.sense, definition: row.api.input.value.trim() }));
+        .map((row) => ({
+          sense: row.api.sense,
+          definition: row.api.input.value.trim(),
+          example: row.api.exampleInput.value.trim(),
+        }));
       submit.disabled = true;
       try {
         const res = await api('/api/session/answer', {
@@ -301,7 +402,9 @@ export function mountRound({ prefix, mode }) {
         });
         const kept = {};
         for (const row of res.results) {
-          if (!row.resolved) kept[row.sense] = (payload.find((p) => p.sense === row.sense) || {}).definition || '';
+          if (row.resolved) continue;
+          const sent = payload.find((p) => p.sense === row.sense) || { definition: '', example: '' };
+          kept[row.sense] = { def: sent.definition, example: sent.example };
         }
         await refreshAll(res.done ? '这个词判完了，点「下一个词」继续' : '还有义项没判完，改一改可以再交一次', kept);
       } catch (e) {
@@ -423,14 +526,22 @@ export function mountRound({ prefix, mode }) {
   function stashTyped() {
     if (!shownWord) return;
     const out = {};
-    for (const input of r.card.querySelectorAll('.answer-input')) {
+    for (const input of r.card.querySelectorAll('.answer-input, .answer-example-input')) {
       const sense = Number(input.dataset.sense);
-      if (Number.isInteger(sense) && input.value) out[sense] = input.value;
+      if (!Number.isInteger(sense)) continue;
+      const slot = (out[sense] ||= {});
+      if (input.classList.contains('answer-example-input')) slot.example = input.value;
+      else slot.def = input.value;
     }
     pending.set(shownWord, out);
   }
 
   const typedFor = (word, extra) => ({ ...(pending.get(word) || {}), ...extra });
+
+  // 同一时刻只认最后一次刷新：refresh 中间要 await 一次 reveal，两次刷新叠在一起的话
+  // 两边都会往卡里 append，屏幕上就出现两张一样的卡（监听器也跟着翻倍）。每次刷新领个号，
+  // append 之前对一下号。
+  let renderSeq = 0;
 
   async function refresh(note, typed = {}) {
     stashTyped();
@@ -441,11 +552,13 @@ export function mountRound({ prefix, mode }) {
       toast(e.message, 'bad');
       return;
     }
-    const { state, current, study, preview } = view;
-    const mine = state && state.mode === mode;
-    syncControls(state);
-    renderProgress(state, preview || { judged: 0, total: 0 }, mine ? current : null, mine ? study : null);
+    const { state: round, current, study, preview } = view;
+    syncCount();
+    const mine = round && round.mode === mode;
+    syncControls(round);
+    renderProgress(round, preview || { judged: 0, total: 0 }, mine ? current : null, mine ? study : null);
 
+    const seq = ++renderSeq;
     r.card.innerHTML = '';
     shownWord = null;
     if (!mine || (!study && !current)) {
@@ -456,24 +569,25 @@ export function mountRound({ prefix, mode }) {
         renderStudy(study);
       } else {
         shownWord = current.word;
-        await renderCard(state, current, typedFor(current.word, typed));
+        await renderCard(round, current, typedFor(current.word, typed), seq);
       }
     }
 
-    renderFeedback(state && mine ? note : null);
+    renderFeedback(round && mine ? note : null);
     renderSettle(
-      state && mine ? state : null,
+      round && mine ? round : null,
       preview || { add: [], remove: [], skipped: [], judged: 0, total: 0 },
       current,
     );
   }
 
   async function start(force) {
+    const count = syncCount();
     try {
       await api('/api/session/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode, model: $('#model').value, lang: r.lang.value, force }),
+        body: JSON.stringify({ mode, count, model: $('#model').value, lang: r.lang.value, force }),
       });
       pending.clear();
       renderFeedback(null);
