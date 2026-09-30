@@ -17,8 +17,9 @@ import {
   planDeleteEntry,
   applyEdits,
 } from '../vocab.js';
+import { realVocabFile } from './real-vocab.js';
 
-const REAL = readFileSync(path.join(import.meta.dirname, '..', 'Vocabulary.md'), 'utf8');
+const REAL = readFileSync(realVocabFile(), 'utf8');
 const fx = (lines) => lines.join('\n');
 const ls = (text) => text.split('\n');
 const byWord = (entries) => Object.fromEntries(entries.map((e) => [e.word, e]));

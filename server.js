@@ -99,6 +99,17 @@ const senseList = (e) =>
     ? e.senses
     : [{ level: e.difficulty, definition: null, chinese: e.chinese ?? null, example: e.example, checked: e.checked }];
 
+// 词表路径当前的状况：没填 / 不是文件 / 好着。设置页据此提示。
+function vocabFileProblem(p) {
+  if (!p) return '还没设置词表路径';
+  try {
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) return null;
+    return `找不到这个文件：${p}`;
+  } catch (e) {
+    return `这个路径打不开：${e.message}`;
+  }
+}
+
 function readEntries(store) {
   const { entries, errors, stats } = parse(store.readFile());
   if (errors.length) {
@@ -223,7 +234,8 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
           modelRoutes: Object.fromEntries(s.extraModels.map((m) => [m.name, { baseUrl: m.baseUrl, keyName: m.keyName }])),
           envFile: config.envFile,
           settingsFile: config.settingsFile,
-          vocabFile: config.vocabFile,
+          vocabFile: s.vocabFile ?? null,
+          vocabFileError: vocabFileProblem(s.vocabFile),
           hasKey: Boolean(config.keyNames?.length),
         },
       };
@@ -611,11 +623,20 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
 
     '/api/settings': async (req) => {
       const body = await readJson(req);
+      // 词表路径必须指向一个真实文件；存绝对路径，免得相对路径跟着工作目录漂。
+      if (body && typeof body === 'object' && !Array.isArray(body) && 'vocabFile' in body) {
+        const raw = body.vocabFile;
+        if (typeof raw === 'string' && raw.trim()) {
+          const abs = path.resolve(raw.trim());
+          const problem = vocabFileProblem(abs);
+          if (problem) throw httpError(400, 'badVocabFile', problem);
+          body.vocabFile = abs;
+        }
+      }
       const out = settingsStore.patch(body);
       if (out.error) throw httpError(400, out.error.code, out.error.message);
       return { status: 200, body: getRoutes['/api/settings']().body };
     },
-
 
   };
 
@@ -654,25 +675,37 @@ export function createApp({ store, config, ai, settings, session, openFile, cefr
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const config = loadConfig();
-  const store = createStore({ file: config.vocabFile, backupDir: config.backupDir, mirrorFile: config.vocabMirror });
-  try {
-    const { stats } = store.selfCheck();
-    console.log(`词表自检通过：${stats.total} 条 · ${stats.senses.total} 条义项 · 已掌握 ${stats.checked} 词 / ${stats.senses.checked} 义项`);
-  } catch (e) {
-    console.error(`启动失败：${e.message}`);
+  const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: config.keyNames });
+
+  // 每个请求都按设置里的当前值找目标：设置页改完保存就立刻生效，不用重启。
+  const store = createStore({
+    file: () => settings.get().settings.vocabFile,
+    backupDir: config.backupDir,
+  });
+
+  // 路径没填或文件不在，只是警告并照常起服务——否则你就进不了设置页去改它。
+  // 词表本身解析坏了仍旧拒绝启动，那是数据问题，不该带着坏数据跑。
+  const checked = (() => {
+    const p = settings.get().settings.vocabFile;
+    if (!p) return { level: 'warn', message: '还没设置词表路径，去「设置」里填一个' };
+    if (!fs.existsSync(p)) return { level: 'warn', message: `词表文件不存在：${p}` };
+    try {
+      const { stats } = store.selfCheck();
+      return {
+        level: 'ok',
+        message: `${stats.total} 条 · ${stats.senses.total} 条义项 · 已掌握 ${stats.checked} 词 / ${stats.senses.checked} 义项`,
+      };
+    } catch (e) {
+      return { level: 'bad', message: e.message };
+    }
+  })();
+  if (checked.level === 'ok') console.log(`词表自检通过：${checked.message}`);
+  else if (checked.level === 'warn') console.log(`词表自检跳过：${checked.message}`);
+  else {
+    console.error(`启动失败：${checked.message}`);
     process.exit(1);
   }
-  const MIRROR_NOTE = {
-    linked: '词表与本目录那份是同一个文件',
-    'adopted-mirror': '本目录那份更新，已写回词表并重建链接',
-    'refreshed-mirror': '已用词表内容刷新本目录那份并重建链接',
-  };
-  const synced = store.sync();
-  if (config.vocabMirror && synced.action !== 'linked') {
-    const note = MIRROR_NOTE[String(synced.action).replace(/-(symlink|copied)$/, '')];
-    console.log(`词表链接：${synced.action}${note ? `（${note}）` : ''}`);
-  }
-  const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: config.keyNames });
+
   const ai = createAi({
     getDefaultModel: () => settings.get().settings.model,
     getPrompts: () => settings.get().settings.prompts,
@@ -681,7 +714,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   createApp({ store, config, ai, settings }).listen(config.port, '127.0.0.1', () => {
     const s = settings.get();
     console.log(`Vocabulary 助手已就绪：http://127.0.0.1:${config.port}`);
-    console.log(`数据源：${config.vocabFile}${config.vocabMirror ? `（镜像：${config.vocabMirror}）` : '（无镜像）'}`);
+    console.log(`数据源：${s.settings.vocabFile || '（还没设置，请在设置页填词表路径）'}`);
     console.log(`生效模型：${s.settings.model || '（未设置，请在设置页选择）'}${s.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
     if (!config.keyNames?.length) console.log('提示：.env 里没有任何 VOCAB_KEY_名字=… 密钥，加词与自测暂不可用');
   });

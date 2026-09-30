@@ -383,6 +383,10 @@ button:focus-visible {
   font-size: 12.5px;
 }
 
+.hint.bad {
+  color: var(--danger);
+}
+
 .count {
   color: var(--fg-muted);
   font-size: 12.5px;

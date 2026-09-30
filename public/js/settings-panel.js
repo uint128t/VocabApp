@@ -49,7 +49,24 @@ function setSaveState(message, bad) {
   el.className = bad ? 'save-state bad' : 'save-state';
 }
 
+const VOCAB_NOTE = '指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。';
+
+function showVocabNote(problem) {
+  const el = $('#vocabFileNote');
+  el.textContent = problem ? `当前读不了词表：${problem}。把路径改对再保存。` : VOCAB_NOTE;
+  el.className = problem ? 'hint bad' : 'hint';
+}
+
+// 词表路径一变，词表面板里显示的数据就过期了。由入口把 loadEntries 接进来，
+// 免得 settings-panel 反过来 import vocab-list 形成环。
+let vocabFileReload = null;
+
+export function setVocabFileReload(fn) {
+  vocabFileReload = fn;
+}
+
 async function saveSettings(patch, notice) {
+  const before = settings ? settings.vocabFile : null;
   setSaveState('保存中…');
   try {
     const body = await api('/api/settings', {
@@ -57,11 +74,14 @@ async function saveSettings(patch, notice) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch),
     });
+    const switched = body.settings.vocabFile !== before;
     settings = body.settings;
     applyTheme(settings.theme);
     syncSettingDefaults();
+    showVocabNote(body.vocabFileError);
     setSaveState(`已保存 ${new Date().toLocaleTimeString()}`);
     if (notice) toast(notice);
+    if (switched && vocabFileReload) await vocabFileReload();
     return true;
   } catch (e) {
     setSaveState(`保存失败：${e.message}`, true);
@@ -118,6 +138,8 @@ async function loadSettings() {
     keyNames = body.keyNames || [];
     fillModelSelect(body.models, settings.model);
     $('#keyFlag').hidden = Boolean(body.hasKey);
+    $('#vocabFile').value = body.vocabFile || '';
+    showVocabNote(body.vocabFileError);
     fillSelect($('#newModelKey'), keyNames, keyNames[0]);
     $('#promptEntry').value = settings.prompts.entry || '';
     $('#promptJudge').value = settings.prompts.judge || '';
@@ -134,6 +156,7 @@ async function loadSettings() {
 
 function settingsFromForm() {
   return {
+    vocabFile: $('#vocabFile').value.trim(),
     theme: $('#setTheme').value,
     lang: $('#setLang').value,
     model: $('#setModel').value || null,

@@ -1,12 +1,20 @@
-# 交接笔记（2026-09-30 第四轮）
+# 交接笔记（2026-09-30 第五轮）
 
 这是会话交接用的速览，会过期。**规格与唯一权威永远是同目录的 `README.md`**，动代码前先翻它（§3 决策表、§4 实现、§7.3 待办）。用完这份就可以删。
 
 ## 现状一句话
 
-围绕 `Vocabulary.md` 的手工词表工具，代码与文档都在本目录，数据真身留在 Obsidian 库里（本目录的 `Vocabulary.md` 是指向它的软链，两边都能改，读写前自动对齐）。已推 GitHub **私有**仓库 `github.com/uint128t/VocabApp`，分支 `main`。测试全绿；**这一轮的改动还没提交**。服务由本目录的 `VocabApp.bat` 起在 5317 上。
+围绕 `Vocabulary.md` 的手工词表工具，代码与文档都在本目录，数据真身留在 Obsidian 库里，工具按**设置页里填的路径**去读写它（保存后立即生效；本目录里不再放软链）。已推 GitHub **私有**仓库 `github.com/uint128t/VocabApp`，分支 `main`。测试全绿；**这一轮的改动还没提交**。服务由本目录的 `VocabApp.bat` 起在 5317 上。
 
 五个面板：加词 · 词表 · **学习** · **复习** · 设置。
+
+## 这一轮做了什么（词表路径搬进设置，D26）
+
+用户要求「`settings.json` 存了 `vocabFile` 就不要在 `.env` 里再存一份」。于是词表路径从「`.env` 的 `VOCAB_FILE` + 工具目录里一份指向真身的软链」改成 **`settings.json` 的 `vocabFile` 一处**：设置页顶部新增「词表文件」输入框，保存后**立即生效**（`createStore` 的 `file` 改成函数，每次读写都重新解析目标），**必填**（空串/空白 `400 badSettings`，指向不存在的文件 `400 badVocabFile`，存下来的是绝对路径）。
+
+连带清掉的：`config.vocabMirror`、`store.syncMirror()` 与那套 mtime 双向仲裁、对应的 4 条 store 单测与 3 条 config 单测、工具目录里的 `Vocabulary.md` 软链。**保留**的是写盘时的链接感知（软链先 `realpath` 再写、硬链原处覆盖写）——设置里那个路径本身可能就是个链接。另外两个测试文件（`vocab.test.js`、`cefr.test.js`）原先直接读 `<项目>/Vocabulary.md`，现在改成读 `settings.json` 的 `vocabFile`（新增 `test/real-vocab.js`，找不到就报错而不是悄悄跳过）。测试 212 → **209**。
+
+`.env` 里那行 `VOCAB_FILE` 我删不了（权限层禁止任何工具读写 `.env`），得用户自己删——代码已经完全不读它了。用户当前的 `settings.json` 里我已经把 `vocabFile` 补上了（`C:/Users/Victor/Other/Notes/Vocabulary.md`），不用他手填。
 
 ## 这一轮做了什么（学习 / 复习取代自测 / 整测）
 
@@ -46,12 +54,17 @@ node tools/build-cefr-data.mjs    重建 data/cefr.json
 凡是会写盘的验证，一律用沙盒，别碰真表：
 
 ```
-把 VOCAB_FILE / VOCAB_BACKUP_DIR / VOCAB_SETTINGS_FILE / VOCAB_STATE_DIR
-全指到 %TEMP%/vocab-* 里的副本（settings.json 直接拷一份，里面有模型配置），PORT=5318，
-跑完 diff 再删。镜像不必手动关：VOCAB_FILE 指到副本后 vocabMirror 自动变 null。
+把 VOCAB_BACKUP_DIR / VOCAB_SETTINGS_FILE / VOCAB_STATE_DIR 指到 %TEMP%/vocab-* 里的副本，
+PORT=5318。词表路径现在写在设置里，所以那份沙盒 settings.json 的 vocabFile 必须改成副本
+路径（或者干脆写一份只带 {"vocabFile": "<副本>"} 的干净设置文件；模型配置也在这个文件里，
+想连着用就拷真的再改路径）。跑完 diff 再删。
+起来之后先看服务窗口第二行的「数据源」，确认是副本再动手——拷了真 settings.json 却忘了改
+vocabFile，就是直接读写真表。
 ```
 
 ## 这次踩到的坑（会重复遇到）
+
+**沙盒里最危险的一处：拷了真的 `settings.json`，就等于把真表路径一起拷过去了。** 词表路径现在写在设置里（`vocabFile`），所以那份沙盒设置文件必须改路径；起来之后第一件事是看服务窗口第二行的「数据源」，确认是副本再动手。
 
 **后端单测兜不住前端，界面改动必须手点一遍。** 这一轮「点『不会』把同一张卡上别的行已经打的字冲掉」是纯前端的错，212 条测试全绿也照样漏，手点到第三张卡才发现。别拿测试绿了当界面没事。
 

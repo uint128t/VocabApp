@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createApp } from '../server.js';
-import { createStore } from '../store.js';
+import { createStore, createStateFile } from '../store.js';
+import { createSettings } from '../settings.js';
 import { parseEnv, loadConfig } from '../config.js';
 
 const FIXTURE =
@@ -38,13 +39,16 @@ async function start(content = FIXTURE, { ai, cefr } = {}) {
   dirs.push(dir);
   const file = path.join(dir, 'Vocabulary.md');
   fs.writeFileSync(file, content);
-  const store = createStore({ file, backupDir: path.join(dir, 'backups') });
-  const server = createApp({
-    store,
-    ai,
-    cefr: cefr || fakeCefr(),
-    config: { vocabFile: file, settingsFile: path.join(dir, 'settings.json'), stateDir: path.join(dir, 'state'), keys: { TEST: 'sk-test' } },
-  });
+  const config = {
+    settingsFile: path.join(dir, 'settings.json'),
+    stateDir: path.join(dir, 'state'),
+    keys: { TEST: 'sk-test' },
+  };
+  // 与生产一致：词表路径存在设置里，store 每次都按当前设置取目标（所以改了立刻生效）
+  const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: config.keyNames });
+  settings.patch({ vocabFile: file });
+  const store = createStore({ file: () => settings.get().settings.vocabFile, backupDir: path.join(dir, 'backups') });
+  const server = createApp({ store, ai, cefr: cefr || fakeCefr(), config, settings });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   servers.push(server);
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -52,9 +56,10 @@ async function start(content = FIXTURE, { ai, cefr } = {}) {
     dir,
     file,
     store,
+    settings,
     server,
     base,
-    settingsFile: path.join(dir, 'settings.json'),
+    settingsFile: config.settingsFile,
     stateFile: path.join(dir, 'state', 'session.json'),
   };
 }
@@ -552,10 +557,11 @@ test('POST /api/settings makes the saved language the judging default', async ()
 
 test('POST /api/settings rejects invalid values and leaves the file untouched', async () => {
   const { base, settingsFile, dir } = await start(SORT_FIXTURE, { ai: fakeAi() });
+  const seeded = fs.readFileSync(settingsFile);
   const bad = await post(base, '/api/settings', { theme: 'neon' });
   assert.equal(bad.status, 400);
   assert.equal(bad.body.error.code, 'badSettings');
-  assert.ok(!fs.existsSync(settingsFile));
+  assert.deepEqual(fs.readFileSync(settingsFile), seeded, '被驳回就不该动设置文件');
 
   assert.equal((await post(base, '/api/settings', { unknownKey: 12 })).status, 200);
   const before = fs.readFileSync(settingsFile);
@@ -563,6 +569,33 @@ test('POST /api/settings rejects invalid values and leaves the file untouched', 
   assert.equal(worse.status, 400);
   assert.deepEqual(fs.readFileSync(settingsFile), before);
   assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.tmp')), []);
+});
+
+test('词表路径存在设置里，改完立刻生效', async () => {
+  const { base, dir, file } = await start(SORT_FIXTURE, { ai: fakeAi() });
+  const other = path.join(dir, 'other.md');
+  fs.writeFileSync(other, '### Z\n\n- zed\n  - [ ] #B1 - the last letter - Z is the last letter.\n');
+
+  const beforeBytes = fs.readFileSync(file);
+  const before = (await (await fetch(`${base}/api/entries`)).json()).entries.map((e) => e.word);
+  assert.ok(before.length > 1 && !before.includes('zed'), `原文件读出来是 ${before.join(',')}`);
+
+  const missing = await post(base, '/api/settings', { vocabFile: path.join(dir, 'nope.md') });
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.error.code, 'badVocabFile');
+  assert.equal((await post(base, '/api/settings', { vocabFile: '   ' })).status, 400);
+
+  const saved = await post(base, '/api/settings', { vocabFile: other });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.vocabFile, other);
+  assert.equal(saved.body.vocabFileError, null);
+
+  assert.deepEqual(
+    (await (await fetch(`${base}/api/entries`)).json()).entries.map((e) => e.word),
+    ['zed'],
+    '换了路径不用重启就读到新文件',
+  );
+  assert.deepEqual(fs.readFileSync(file), beforeBytes, '旧文件一个字节都没动');
 });
 
 const EDIT_FIXTURE =

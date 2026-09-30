@@ -1,4 +1,5 @@
 export const DEFAULTS = {
+  vocabFile: null,
   model: null,
   extraModels: [],
   lang: 'zh',
@@ -64,6 +65,16 @@ export function mergeSettings(current, patch, { keyNames } = {}) {
   const next = structuredClone(current);
 
   try {
+    if ('vocabFile' in patch) {
+      const v = patch.vocabFile;
+      // undefined = 没给，不动；null = 显式清空（读一份「还没设置」的设置文件时也是它）；
+      // 给了字符串就必须非空白，空串一律驳回（设置页那条是必填）。
+      if (v === null) next.vocabFile = null;
+      else if (v !== undefined) {
+        if (typeof v !== 'string' || !v.trim()) throw new Error('词表路径不能为空');
+        next.vocabFile = v.trim();
+      }
+    }
     if ('model' in patch) {
       const m = patch.model;
       if (m !== null && (typeof m !== 'string' || !m.trim())) throw new Error('model 必须是非空字符串或 null');

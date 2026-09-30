@@ -6,8 +6,9 @@ import path from 'node:path';
 
 import { CEFR_LEVELS, createCefr, createIndex, parseQuery, lookup, sourceLabel, familyCandidates } from '../cefr.js';
 import { parse } from '../vocab.js';
+import { realVocabFile } from './real-vocab.js';
 
-const REAL = fs.readFileSync(path.join(import.meta.dirname, '..', 'Vocabulary.md'), 'utf8');
+const REAL = fs.readFileSync(realVocabFile(), 'utf8');
 const DATA_FILE = path.join(import.meta.dirname, '..', 'data', 'cefr.json');
 const cefr = createCefr({ dataFile: DATA_FILE });
 

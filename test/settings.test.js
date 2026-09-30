@@ -28,12 +28,30 @@ test('defaults apply when there is no settings file', () => {
   assert.equal(out.error, null);
   assert.deepEqual(out.settings, DEFAULTS);
   assert.deepEqual(DEFAULTS, {
+    vocabFile: null,
     model: null,
     extraModels: [],
     lang: 'zh',
     theme: 'auto',
     prompts: { entry: null, judge: null },
   });
+});
+
+test('vocabFile 必填：空串与空白被驳回，null 只表示还没设置', () => {
+  const { settings, file } = setup();
+  for (const bad of ['', '   ', 42]) {
+    assert.equal(settings.patch({ vocabFile: bad }).error.code, 'badSettings', JSON.stringify(bad));
+  }
+  assert.ok(!fs.existsSync(file), '全被驳回就不该落盘');
+
+  const ok = settings.patch({ vocabFile: '  C:/Notes/Vocabulary.md  ' });
+  assert.equal(ok.error, null);
+  assert.equal(ok.settings.vocabFile, 'C:/Notes/Vocabulary.md', '存之前去掉首尾空白');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).vocabFile, 'C:/Notes/Vocabulary.md');
+
+  // null 是合法状态：读一份「还没设置」的设置文件时就是它
+  assert.equal(settings.patch({ vocabFile: null }).error, null);
+  assert.equal(settings.get().settings.vocabFile, null);
 });
 
 test('a corrupt settings file is reported, not silently rewritten', () => {

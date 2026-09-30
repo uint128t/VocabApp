@@ -5,75 +5,34 @@ import { parse } from './vocab.js';
 
 export const AUTO_BACKUP = /^Vocabulary\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z?(?:-\d+)?\.md$/;
 
-const sameFile = (a, b, fs) => {
-  try {
-    const sa = fs.statSync(a);
-    const sb = fs.statSync(b);
-    return sa.ino !== 0 && sa.dev === sb.dev && sa.ino === sb.ino;
-  } catch {
-    return false;
-  }
-};
-
-// 真身（通常是 Obsidian 库里那份）与镜像（本目录的同名文件，硬链或软链）之间的双向同步。
-//  · 链接好着 → 本来就是同一个文件（stat 走链接看 ino 一致），什么都不用做；
-//  · 链接断了（被「写临时文件再改名」式的保存打断：硬链改名只换掉一个名字、另一个名字留在旧 inode 上；
-//    软链名被换成普通文件）→ 谁的时间戳新听谁的：镜像更新就先把镜像内容写回真身，
-//    然后照原来的链接类型重建（软链要权限，建不了就退成硬链，再不行退成普通副本）。
-// 于是两个位置都可以随便改，工具下次读/写时把它俩重新对齐。
-export function syncMirror({ file, mirrorFile, fs = realFs } = {}) {
-  if (!mirrorFile || !file) return { action: 'none' };
-  if (path.resolve(mirrorFile) === path.resolve(file)) return { action: 'none' };
-  if (!fs.existsSync(file) || !fs.existsSync(mirrorFile)) return { action: 'none' };
-  if (sameFile(file, mirrorFile, fs)) return { action: 'linked' };
-
-  const wasSymlink = (() => {
-    try {
-      return fs.lstatSync(mirrorFile).isSymbolicLink();
-    } catch {
-      return false;
-    }
-  })();
-
-  const mine = fs.statSync(file);
-  const theirs = fs.statSync(mirrorFile);
-  const action = theirs.mtimeMs > mine.mtimeMs ? 'adopted-mirror' : 'refreshed-mirror';
-  if (action === 'adopted-mirror') {
-    fs.writeFileSync(file, fs.readFileSync(mirrorFile, 'utf8'), 'utf8');
-  }
-  fs.rmSync(mirrorFile);
-  if (wasSymlink) {
-    try {
-      fs.symlinkSync(path.resolve(file), mirrorFile, 'file');
-      return { action: `${action}-symlink` };
-    } catch {}
-  }
-  try {
-    fs.linkSync(file, mirrorFile);
-  } catch {
-    fs.copyFileSync(file, mirrorFile);
-    return { action: `${action}-copied` };
-  }
-  return { action };
-}
-
-export function createStore({ file, backupDir, maxBackups = 20, fs = realFs, mirrorFile = null }) {
+export function createStore({ file, backupDir, maxBackups = 20, fs = realFs }) {
   let seq = 0;
   let queue = Promise.resolve();
+
+  // file 可以是路径，也可以是「每次取当前值」的函数：设置页改了词表路径要立刻生效，
+  // 所以目标路径每次重新解析，不在建 store 的时候定死。
+  const sourceFile = () => {
+    const f = typeof file === 'function' ? file() : file;
+    if (!f) throw new Error('还没有设置词表文件路径（去「设置」里填一个）');
+    return f;
+  };
 
   // 词表文件常常是个链接，两种链要区别对待：
   //  · 软链：先 resolve 出真实路径再写，否则「改名」会把链接本身换成一个普通文件；
   //  · 硬链（同一 inode 有两个名字）：不能用「写临时文件再改名」——改名只换掉一个名字，
   //    另一个名字还留在旧 inode 上，两边内容会悄悄分叉。这时改成原处覆盖写（写前照例已备份）。
-  let target = file;
-  try {
-    target = fs.realpathSync(file);
-  } catch {
-    target = file;
-  }
-  const hardLinked = () => {
+  const target = () => {
+    const f = sourceFile();
     try {
-      return fs.statSync(target).nlink > 1;
+      return fs.realpathSync(f);
+    } catch {
+      return f;
+    }
+  };
+
+  const hardLinked = (abs) => {
+    try {
+      return fs.statSync(abs).nlink > 1;
     } catch {
       return false;
     }
@@ -96,34 +55,28 @@ export function createStore({ file, backupDir, maxBackups = 20, fs = realFs, mir
     }
   };
 
-  const sync = () => syncMirror({ file: target, mirrorFile, fs });
-
-  const readFile = () => {
-    sync();
-    return fs.readFileSync(target, 'utf8');
-  };
+  const readFile = () => fs.readFileSync(target(), 'utf8');
 
   const writeWithBackup = (text) => {
+    const abs = target();
     fs.mkdirSync(backupDir, { recursive: true });
     const backup = backupName();
-    fs.copyFileSync(target, path.join(backupDir, backup));
+    fs.copyFileSync(abs, path.join(backupDir, backup));
     rotate();
-    if (hardLinked()) {
-      fs.writeFileSync(target, text, 'utf8');
-      sync();
+    if (hardLinked(abs)) {
+      fs.writeFileSync(abs, text, 'utf8');
       return { backup };
     }
-    const tmp = `${target}.${process.pid}.${++seq}.tmp`;
+    const tmp = `${abs}.${process.pid}.${++seq}.tmp`;
     try {
       fs.writeFileSync(tmp, text, 'utf8');
-      fs.renameSync(tmp, target);
+      fs.renameSync(tmp, abs);
     } catch (e) {
       try {
         fs.unlinkSync(tmp);
       } catch {}
       throw e;
     }
-    sync();
     return { backup };
   };
 
@@ -149,9 +102,9 @@ export function createStore({ file, backupDir, maxBackups = 20, fs = realFs, mir
   };
 
   const selfCheck = () => {
-    sync();
-    if (!fs.existsSync(target)) throw new Error(`词表文件不存在：${file}`);
-    fs.accessSync(target, fs.constants.W_OK);
+    const abs = target();
+    if (!fs.existsSync(abs)) throw new Error(`词表文件不存在：${abs}`);
+    fs.accessSync(abs, fs.constants.W_OK);
     const text = readFile();
     const { entries, stats, errors } = parse(text);
     if (errors.length) {
@@ -164,7 +117,7 @@ export function createStore({ file, backupDir, maxBackups = 20, fs = realFs, mir
     return { entries, stats };
   };
 
-  return { file, target, mirrorFile, backupDir, maxBackups, readFile, writeWithBackup, listBackups, enqueue, selfCheck, sync };
+  return { target, sourceFile, backupDir, maxBackups, readFile, writeWithBackup, listBackups, enqueue, selfCheck };
 }
 
 export function createStateFile({ file, fs = realFs }) {

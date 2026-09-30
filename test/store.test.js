@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createStore, AUTO_BACKUP, syncMirror } from '../store.js';
+import { createStore, AUTO_BACKUP } from '../store.js';
 
 const OLD = '### A\n\n- [x] absorb - take in\n\n### B\n\n- [ ] ballpoint - a pen with a metal ball tip\n';
 const NEW = '### A\n\n- [x] absorb - take in\n  - #B1 · Plants absorb water through their roots.\n\n### B\n\n- [ ] ballpoint - a pen with a metal ball tip\n';
@@ -14,20 +14,18 @@ after(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function setup({ content = OLD, maxBackups, fsImpl, mirror = null } = {}) {
+function setup({ content = OLD, maxBackups, fsImpl } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-store-'));
   dirs.push(dir);
   const file = path.join(dir, 'Vocabulary.md');
   fs.writeFileSync(file, content);
-  const mirrorFile = mirror === null ? null : path.join(dir, mirror);
   const store = createStore({
     file,
-    mirrorFile,
     backupDir: path.join(dir, 'backups'),
     maxBackups,
     fs: fsImpl,
   });
-  return { dir, file, mirrorFile, store, backupDir: path.join(dir, 'backups') };
+  return { dir, file, store, backupDir: path.join(dir, 'backups') };
 }
 
 function stamp(minutesAgo) {
@@ -177,73 +175,30 @@ test('a symlinked vocabulary file is written to its real target, not to the link
   assert.equal(fs.readFileSync(real, 'utf8'), NEW);
   assert.equal(fs.readFileSync(path.join(dir, 'backups', fs.readdirSync(path.join(dir, 'backups'))[0]), 'utf8'), OLD);
   assert.equal(fs.existsSync(link), false, '不该在链接名上凭空写出一个普通文件');
-  assert.equal(store.target, real);
+  assert.equal(store.target(), real);
 });
 
-test('an intact mirror is left alone', () => {
-  const { file, mirrorFile, store } = setup({ mirror: 'mirror.md' });
-  fs.linkSync(file, mirrorFile);
-  assert.equal(store.sync().action, 'linked');
-  assert.equal(fs.readFileSync(mirrorFile, 'utf8'), OLD);
-  assert.equal(fs.statSync(file).nlink, 2);
-});
+test('file 传函数时每次重新取目标，改完路径立刻生效', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-store-'));
+  dirs.push(dir);
+  const first = path.join(dir, 'a.md');
+  const second = path.join(dir, 'b.md');
+  const NEWER = `${NEW}\n`;
+  fs.writeFileSync(first, OLD);
+  fs.writeFileSync(second, NEW);
+  let current = first;
+  const store = createStore({
+    file: () => current,
+    backupDir: path.join(dir, 'backups'),
+  });
+  assert.equal(store.readFile(), OLD);
 
-test('a broken mirror link is rebuilt and the newer side wins', () => {
-  // 镜像那份更新（在 App 目录里改过，链接被改名式保存打断）
-  const a = setup({ mirror: 'mirror.md' });
-  fs.linkSync(a.file, a.mirrorFile);
-  const tmp = path.join(a.dir, 'tmp.md');
-  fs.writeFileSync(tmp, NEW);
-  fs.renameSync(tmp, a.mirrorFile);
-  assert.equal(fs.statSync(a.file).nlink, 1, '链接确实断了');
-  assert.equal(a.store.readFile(), NEW, '工具要看到镜像那份的最新内容');
-  assert.equal(fs.readFileSync(a.file, 'utf8'), NEW, '新内容已写回真身');
-  assert.equal(fs.readFileSync(a.mirrorFile, 'utf8'), NEW);
-  assert.equal(fs.statSync(a.file).nlink, 2, '链接已重建');
-  assert.equal(a.store.sync().action, 'linked');
+  current = second;
+  assert.equal(store.readFile(), NEW, '换路径后不用重建 store 就跟着走');
+  const res = store.writeWithBackup(NEWER);
+  assert.equal(fs.readFileSync(second, 'utf8'), NEWER);
+  assert.equal(fs.readFileSync(path.join(dir, 'backups', res.backup), 'utf8'), NEW, '备份取的是新路径上的内容');
 
-  // 真身更新（真身被改名式保存过，镜像成了陈旧快照）
-  const b = setup({ mirror: 'mirror.md' });
-  fs.linkSync(b.file, b.mirrorFile);
-  const tmp2 = path.join(b.dir, 'tmp.md');
-  fs.writeFileSync(tmp2, NEW);
-  fs.renameSync(tmp2, b.file);
-  assert.equal(b.store.readFile(), NEW);
-  assert.equal(fs.readFileSync(b.mirrorFile, 'utf8'), NEW, '镜像已用真身内容刷新');
-  assert.equal(fs.statSync(b.file).nlink, 2);
-});
-
-test('a mirror that is the same file is a no-op, and a missing mirror does nothing', () => {
-  const { file, mirrorFile } = setup({ mirror: 'mirror.md' });
-  const seen = [];
-  const fake = {
-    ...fs,
-    existsSync: () => true,
-    statSync: () => ({ dev: 1, ino: 7, nlink: 1, mtimeMs: 0 }),
-    lstatSync: () => ({ isSymbolicLink: () => true }),
-    rmSync: () => seen.push('rm'),
-    symlinkSync: () => seen.push('symlink'),
-    linkSync: () => seen.push('link'),
-  };
-  assert.equal(syncMirror({ file, mirrorFile, fs: fake }).action, 'linked');
-  assert.deepEqual(seen, [], '同一个文件时什么都不该动');
-
-  const plain = setup();
-  assert.equal(plain.store.sync().action, 'none');
-});
-
-test('a broken symlink mirror is rebuilt as a symlink when that is allowed', () => {
-  const { file, mirrorFile } = setup({ mirror: 'mirror.md' });
-  const seen = [];
-  const fake = {
-    ...fs,
-    existsSync: () => true,
-    statSync: (p) => (p === file ? { dev: 1, ino: 7, nlink: 1, mtimeMs: 100 } : { dev: 1, ino: 9, nlink: 1, mtimeMs: 50 }),
-    lstatSync: () => ({ isSymbolicLink: () => true }),
-    rmSync: () => seen.push('rm'),
-    symlinkSync: (target) => seen.push(`symlink:${target}`),
-  };
-  const out = syncMirror({ file, mirrorFile, fs: fake });
-  assert.equal(out.action, 'refreshed-mirror-symlink');
-  assert.deepEqual(seen, ['rm', `symlink:${path.resolve(file)}`]);
+  current = null;
+  assert.throws(() => store.readFile(), /还没有设置词表文件路径/);
 });

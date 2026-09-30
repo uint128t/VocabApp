@@ -40,35 +40,11 @@ test('loadConfig picks up keys, port and the path overrides', () => {
   assert.equal(c.stateDir, 'X:/state');
 });
 
-test('loadConfig falls back to this folder and keeps the mirror when VOCAB_FILE is unset', () => {
+test('loadConfig no longer decides the vocabulary path', () => {
   const dir = sandbox();
-  fs.writeFileSync(path.join(dir, 'Vocabulary.md'), '### A\n');
-  const c = loadConfig({ dir, env: {} });
-  assert.equal(c.vocabFile, path.join(dir, 'Vocabulary.md'));
-  assert.equal(c.vocabMirror, path.join(dir, 'Vocabulary.md'));
-});
-
-test('loadConfig keeps the mirror when VOCAB_FILE resolves to the same file', () => {
-  const dir = sandbox();
-  fs.writeFileSync(path.join(dir, 'real.md'), '### A\n');
-  fs.symlinkSync(path.join(dir, 'real.md'), path.join(dir, 'Vocabulary.md'), 'file');
+  // 词表路径归 settings.json 的 vocabFile 管；config 只认其余那几项
   const c = loadConfig({ dir, env: { VOCAB_FILE: path.join(dir, 'real.md') } });
-  assert.equal(c.vocabFile, path.join(dir, 'real.md'));
-  assert.equal(c.vocabMirror, path.join(dir, 'Vocabulary.md'));
-});
-
-test('loadConfig drops the mirror when the vocabulary file lives elsewhere', () => {
-  const dir = sandbox();
-  fs.writeFileSync(path.join(dir, 'Vocabulary.md'), '### A\n');
-  fs.writeFileSync(path.join(dir, 'copy.md'), '### B\n');
-  const c = loadConfig({ dir, env: { VOCAB_FILE: path.join(dir, 'copy.md') } });
-  assert.equal(c.vocabFile, path.join(dir, 'copy.md'));
-  assert.equal(c.vocabMirror, null);
-});
-
-test('loadConfig drops the mirror when the target does not exist yet', () => {
-  const dir = sandbox();
-  fs.writeFileSync(path.join(dir, 'Vocabulary.md'), '### A\n');
-  const c = loadConfig({ dir, env: { VOCAB_FILE: path.join(dir, 'not-there.md') } });
-  assert.equal(c.vocabMirror, null);
+  assert.equal(c.seedVocabFile, undefined);
+  assert.equal(c.vocabFile, undefined);
+  assert.equal(c.vocabMirror, undefined);
 });

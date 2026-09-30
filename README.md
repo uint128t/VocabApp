@@ -4,7 +4,7 @@
 
 双击本目录的 `VocabApp.bat` 启动，浏览器会打开 `http://127.0.0.1:5317/`。
 
-本目录的 `Vocabulary.md` 是个软链，通到 Obsidian 库里那份真身。两边都能改，读写之前工具会把它们对齐（§2.7）。
+词表真身在 Obsidian 库里，工具按**设置页里填的那个路径**去读写它（保存后立即生效，不用重启）。工具目录里不再放软链，也不存在两处内容需要对齐的问题（§4.8）。
 
 `node --test` 是全部测试，206 条。
 
@@ -94,11 +94,10 @@
 - **外科手术式行编辑**：每次写盘都是重新读磁盘、定位目标行、生成 `Edit`、备份、原子写（tmp + rename）。解析器不认识的行、章节标题、空行都不参与序列化，原样保留。整文件重写重排这种事不会发生。
 - **编码换行**：固定 UTF-8 无 BOM（文件里有 `cliché` 这类非 ASCII 字符），写前检测现有换行风格并沿用（当前是 LF）。
 - **备份**：写前把旧内容存成 `backups/Vocabulary.<ISO 时间>.md`，只留最近 20 份；文件名带自定义后缀的不会被轮转删掉。备份就是撤销入口。
-- **链接感知 + 兜底对齐**（2026-09-29 加）：本目录的 `Vocabulary.md` 是库里头真身的链接，两个位置都能改。工具这边分三种情况处理：
+- **链接感知**（2026-09-29 加，2026-09-30 随路径搬进设置去掉镜像）：设置里那个路径可能就是别的编辑器或系统放的一个链接，写的时候要区别对待：
   - **软链**：写前先 `realpath` 解析到真身，否则改名会把链接换成普通文件。真身被别的编辑器「写临时文件再改名」保存时，软链指向路径，会自动看到新内容，不必修。
   - **硬链**（`nlink > 1`）：不能用「写临时文件再改名」，因为改名只换掉一个名字，另一个名字留在旧 inode 上，两边内容会悄悄分叉。这种情况改成原处覆盖写。
-  - **兜底**：每次读或写之前，`syncMirror()` 先比两边是不是同一个文件（`stat.ino`）。不是同一个（被改名式保存打断过），就**谁的时间戳新听谁的**：镜像新就把镜像内容写回真身，否则用真身刷新镜像，然后照原类型重建链接。重建软链要权限，权限不够退硬链，再不行退普通副本。链接断了也不会真的分叉，最多是「下一次访问时修一下」。
-  - 单测覆盖了两种写模式、断链双向修复和软链重建，沙盒里也实测过。
+  - 单测覆盖了这两种写模式。原先还有一套「工具目录里放一份镜像 + 断链时双向对齐」的兜底，随路径搬进设置一起去掉了：路径只有一个来源，就不存在两边分叉。
 - **写入串行**：进程内单队列，杜绝并发写坏文件。
 - **主行多出来的段只认最后一段**：`- word - a - b` 这种（旧同义词链的残留）会把 `b` 当释义，编辑一次就被改写成规范形式。工具不为这类写法做任何特殊处理。
 
@@ -123,7 +122,7 @@
 | D13 | 判定反馈提供中英开关，默认中文 | 语言只影响 `reason` 与 `suggestion`；判定标准、释义与例句的英文要求不变 |
 | D14 | 编辑只改释义、中文、难度、例句、勾选，**不改词头** | 动词头会牵动排序与章节归属，还可能撞出重复词头，风险大于收益。要换词就「加词 + 删除旧行」（D17）。词头只读，里面的旧式多余段会在下次编辑时被规范化 |
 | D15 | 轮次作答：每词最多三次机会，跑完统一结算 | 一轮上百条，逐词写盘会产生上百份备份且无法回看；改为作答进度实时写 `.state/session.json`（可暂停、可断点续测），结束时给「将勾选 / 将取消」清单、确认后一次写盘。闭卷模式下 AI 只能返回固定错误码（自由文本一律丢弃），`suggestion` 强制为空，`storedDefinition` 不发给模型，过程中不透答案 |
-| D16 | 模型全平级：一切模型配置都在 `settings.json`，`.env` 只放密钥、`VOCAB_FILE`、`PORT`，工具绝不写 `.env` | 不再有 `.env` 默认接入点（`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`VOCAB_MODEL(S)`、`VOCAB_EXTRA_JSON` 全部废除）。`extraModels` 里每个模型自带 `{name, baseUrl, keyName, extra}`，相互平级、没有回退；密钥用 `VOCAB_KEY_名字=…` 存 `.env`，界面只选名字 |
+| D16 | 模型全平级：一切模型配置都在 `settings.json`，`.env` 只放密钥与 `PORT`，工具绝不写 `.env` | 不再有 `.env` 默认接入点（`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`VOCAB_MODEL(S)`、`VOCAB_EXTRA_JSON` 全部废除）。`extraModels` 里每个模型自带 `{name, baseUrl, keyName, extra}`，相互平级、没有回退；密钥用 `VOCAB_KEY_名字=…` 存 `.env`，界面只选名字。（2026-09-30 起 `.env` 也不再放 `VOCAB_FILE`，见 D26） |
 | D17 | 词表可整条删除一个词（主行 + 义项行），两步内联确认 | 破坏性操作，所以「点一次变成『确认删除 xxx』、5 秒内再点一次才落盘」，不用原生弹窗（避免自动化与焦点问题）；写盘前照例备份。与整测不互斥：队列冻结在开始时，中途删掉的词在结算时按 `wordNotFound` 跳过 |
 | D18 | CEFR 档位改为查表，模型不再猜难度 | 免费免密钥的官方 CEFR API 不存在（Cambridge EVP 只有网页，Oxford 官方 API 要申请且收费），所以落地为**内置查询表** `data/cefr.json`，分层优先并与许可一起记录（§4.5）。命中不了的记「CEFR 表外」：档位留空、界面标注、由人手动选，绝不回退成 AI 猜测 |
 | D19 | 一词多义或多词性用**平级义项行**，每条义项自带 CEFR 档位 | 主行只留词头，每条义项一行同缩进。硬约束是每条义项都必须带释义、档位、例句；整条没有释义就解析报错，写入层对此有兜底与专门的单测。旧式「释义在主行、子行只放例句」的写法从 2026-09-29 起不再兼容（§3.2） |
@@ -133,6 +132,7 @@
 | D23 | 词表平时只留义项级勾选框，批量操作收进「复选模式」 | 一行里同时挂着多选框、词级 ☑ 和义项框三样东西，读起来吵，也容易点错。改成两副面孔：平时只有义项行自带的框（那是掌握状态的唯一写盘开关），点开「复选模式」才换成词头前的多选框，义项框收起、编辑删除隐去，选中后统一「重构 / 标记为已掌握 / 标记为未掌握」，退出时清空已选。批量改掌握状态走新接口 `POST /api/commit-mastery`，一次写盘一份备份；若让前端循环调 `/api/set-checked`，几十个词会瞬间产生几十份备份，把 20 份的轮转上限冲掉 |
 | D24 | 自测与整测都改成「一个词一张卡」 | 原先一题只挂一条义项，卡片上根本看不出这个词还有别的义项，翻到哪条全看运气。现在整词的义项都摆在卡上：本轮要考的逐条作答，其余的作参考摆着、不参与判定也不进结算。整测的队列因此从义项级改成词级（一个词只出现一次），义项级的记录（`word#sense`）、每条三次机会与结算粒度都不动。**留空与「不会」都算不会**：原来 SKIP 只是跳过，现在两者都按不会进结算清单，那颗按钮也就改名「不会」。判定仍逐条调模型，闭卷规矩不变 |
 | D25 | 自测与整测换成「学习」与「复习」两种模式 | 用户反馈这两个模式效果不明显，要求换成语义清楚的两件事。**学习**：随机抽 10 个「还有义项没掌握」的词，先逐个摊开整词的义项与例句看一遍（一次只出一个词，看完点「下一个」），10 个看完再进测试段；**复习**：随机抽 30 个「整词已掌握」的词，直接进测试段。两者共用同一个状态机（词级队列、义项级记录、每条三次机会、暂停/继续/放弃、跨重启续测、结算清单一次写回加备份），差别只有三处：抽词池（未掌握 / 已掌握）、有没有看词段、结算方向（学习只勾选、复习只取消，这样学习时那些早就勾上的义项不会被误取消）。**抽词口径按词级**：一个词能否进池只看整词掌握状态，抽中后考它全部义项，与词表「难度按任一义项命中」的口径一致；池子不足就抽多少算多少，一个都没有时明确报「没有不认识的词」。**范围筛选（章节/难度/关键词）与自测的「只从未掌握抽」勾选框一并取消**：两个模式的池子已经由掌握状态定死，再加筛选会让「抽 10 个」这种定量抽词变得不可预测。**「考这个词」搬到词表条目右下角**：点开就地展开答题卡，逐条判定，通过的义项旁给一颗勾选按钮，不点不写盘（沿用 D5 的主张）。代价是自测面板上的「换例句」没了，逐义项生成例句在词表就地编辑里仍在。引擎与路由从 `exam` 改名为 `session`（`session.js` / `/api/session/*`），「整测」这个概念已经不存在，留着旧名会误导；状态文件版本升到 4，旧轮次作废；`GET /api/random` 随之删除，抽词统一由 `POST /api/session/start` 做。答题卡形态相对 D24 不变，只是不再有「本轮不考」的义项（整词全考） |
+| D26 | 词表路径搬进设置，工具目录不再放软链 | 用户要求「`settings.json` 存了 `vocabFile` 就不要在 `.env` 里再存一份」。原来路径由 `.env` 的 `VOCAB_FILE` 决定，工具目录里放一份指向真身的软链，`store.js` 还有一套「两处对齐」的兜底（断链时按 mtime 仲裁、重建链接）。现在路径只存在 `settings.json` 的 `vocabFile`：设置页可改、保存后**立即生效**（store 的目标路径改成每次解析，不再建 store 时定死），且**必填**（空串或指向不存在的文件都驳回，`400 badVocabFile`）。随之删掉 `config.vocabMirror`、`store.syncMirror` 与那套 mtime 仲裁及对应单测，也删掉工具目录里那个 `Vocabulary.md` 软链——路径只有一个来源，就不存在两份内容分叉。写盘时的**链接感知**（软链先 `realpath` 再写、硬链原处覆盖写）保留，那是另一回事：设置里那个路径本身可能就是个链接 |
 
 ### 3.1 为什么最小单位是义项
 
@@ -140,6 +140,7 @@
 
 ### 3.2 已废止 / 被取代
 
+- **`.env` 里的 `VOCAB_FILE`、工具目录里的 `Vocabulary.md` 软链、`store.syncMirror` 的双向对齐**：2026-09-30 随 D26 一起下线。路径只留 `settings.json` 的 `vocabFile` 一处；写盘时的链接感知保留。
 - **自测与整测两种模式**（连同自测的「就考这个」、每行的「换例句」、按章节/难度/关键词抽一轮与「只从未掌握抽」勾选框）：2026-09-30 被 D25 换成「学习」与「复习」。判定不写盘这条主张仍在（D5），落地位置改成词表条目里的「考这个词」。`GET /api/random` 一并删除。
 - **整测的词级队列状态文件 `version: 3`**：D25 起状态文件为 `version: 4`，v3 及更早的进度一律当作没有进行中的轮次。
 - **整测的义项级队列**（一题一条义项、状态文件 `version: 2`）：被 D24 换成词级队列后不再读取，旧进度一律当作没有进行中的轮次。
@@ -173,7 +174,7 @@
 server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入队列（末尾是 CLI 启动块）
    ├── vocab.js     纯字符串层：parse / serialize / sortKey / plan* / applyEdits
    ├── store.js     文件层：读 / 备份 / 原子写 / 软硬链处理与兜底对齐 / 串行队列 / createStateFile
-   ├── config.js    .env 解析（密钥、词表与备份/设置/状态/CEFR 路径、端口）
+   ├── config.js    .env 解析（密钥、备份/设置/状态/CEFR 路径、端口；词表路径不归它管）
    ├── settings.js  运行期偏好：DEFAULTS / createSettings（白名单校验）
    ├── ai.js        网络层：chat / sensesEntry / judgeEntry / exampleEntry / testTarget
    ├── cefr.js      CEFR 查表：parseQuery / createIndex / lookup / describe / sourceLabel
@@ -212,8 +213,8 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 ### 4.3 store.js / config.js / settings.js
 
 - **store.js**：`readFile()`、`writeWithBackup(text)`、`enqueue(fn)`（串行队列）、`listBackups()`、`selfCheck()`、`createStateFile({file})`（原子 JSON 写，用于考试进度与设置）。启动时校验词表存在可写，并做一次 `parse` 自检；失败就拒绝启动并打印错误行号。
-- **config.js**：`loadConfig()` → `{dir, envFile, keys, keyNames, vocabFile, vocabMirror, cefrFile, backupDir, settingsFile, stateDir, port}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖的路径类环境变量见 §5。`vocabMirror` 只在 `VOCAB_FILE` 与本目录那份 `Vocabulary.md` 经 `realpath` 比对后确实是同一个文件时才给出，否则为 `null`：指到别处（沙盒副本、换台机器）时镜像必须关掉，否则两边 inode 不同，兜底逻辑会按时间戳把一份的内容盖到另一份上。
-- **settings.js**：`DEFAULTS = {model:null, extraModels:[], lang:'zh', theme:'auto', prompts:{entry:null, judge:null}}`。`patch()` 做白名单校验，非法值报 `400 badSettings`，文件损坏时报 `settingsError` 且不静默覆盖。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应 `.env` 里已有的密钥名），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。
+- **config.js**：`loadConfig()` → `{dir, envFile, keys, keyNames, seedVocabFile, cefrFile, backupDir, settingsFile, stateDir, port}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖的路径类环境变量见 §5。`seedVocabFile` 只是「词表路径」这颗种子：设置文件里还没有 `vocabFile` 这个键时用它填一次（老配置的 `.env VOCAB_FILE` 就靠它迁进来），之后运行期一律以设置里的为准。
+- **settings.js**：`DEFAULTS = {vocabFile:null, model:null, extraModels:[], lang:'zh', theme:'auto', prompts:{entry:null, judge:null}}`。`patch()` 做白名单校验，非法值报 `400 badSettings`（`vocabFile` 给空串或空白一律驳回，它是必填；`null` 是「还没设置」这个合法状态），文件损坏时报 `settingsError` 且不静默覆盖。`seed(fields)` 只补设置文件里完全没有的键，写过的键——哪怕值是 `null`——一律不动。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应 `.env` 里已有的密钥名），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。
 
 ### 4.4 session.js（学习 / 复习轮次）
 
@@ -295,7 +296,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | `POST /api/session/pause` `…/resume` `…/abort` | `{}` | 暂停保留全部进度；暂停后作答、推进看词与结算 `409 examPaused`；放弃不改词表 |
 | `POST /api/session/lang` | `{lang}` | `{ok,lang}`；即时改本轮反馈语言并落盘 |
 | `POST /api/session/preview` `…/commit` | — / `{}` | 清单 `{add[],remove[],unchanged,skipped[],total}` / 结算结果 `{changed,backup,state,…}`，`add/remove` 每项是 `{word,sense,level}`；清单方向由本轮的 `mode` 决定 |
-| `GET/POST /api/settings` | 任意设置子集 | `{settings,settingsError,defaults,promptDefaults,contracts,models,keyNames,modelRoutes,envFile,settingsFile,vocabFile,hasKey}`；非法值 `400 badSettings` |
+| `GET/POST /api/settings` | 任意设置子集 | `{settings,settingsError,defaults,promptDefaults,contracts,models,keyNames,modelRoutes,envFile,settingsFile,vocabFile,vocabFileError,hasKey}`；非法值 `400 badSettings`；`vocabFile` 给空串或空白 `400 badSettings`，指向的文件不存在 `400 badVocabFile`（存下来的是绝对路径） |
 | `GET /api/backups` | — | `{files[]}` |
 | `POST /api/open-config` | `{which:'env'\|'settings'}` | `{ok,file}`；用系统编辑器打开配置文件（不改内容） |
 | `POST /api/test-model` | `{model?, baseUrl?, keyName, extra?}` | `{ok,model,baseUrl,latencyMs}`；密钥名不存在 `400 badKeyName` |
@@ -313,7 +314,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 - **删除该词**：点一次「删除」变成红色的「确认删除 xxx」，5 秒内再点一次才落盘（超时自动解除，不弹窗）。一次移除主行与全部义项行，写盘前自动备份，toast 给备份文件名。学习或复习跑到一半删掉的词不会卡住结算。
 - **学习**：工具栏只有反馈语言与「开始学习」。点一下就从「还有义项没掌握」的词里随机抽 10 个，进**看词段**：一次只出一个词，卡上是词头、`### 章节`、`第 i/N 个词` 与这个词**全部**的义项（档位、释义、例句，已经勾上的标「已掌握」当参考），按钮是「下一个 →」，第 10 个之后变成「开始测试这些词」。看词段不判分、不写盘，刷新或重启能接着看。看完进**测试段**：闭卷，一个词一张卡，释义遮住，每条义项一行——档位、例句、一个英文释义输入框，行尾一颗「不会」。填哪条判哪条，**留空与点「不会」都算不会**，两种都进结算清单；某条判错但还有机会时，行上保留你写的释义并标「还剩 n 次」，改一改可以再交一次。整张卡判完才出现「下一个词 →」，不自动翻页，方便你先把反馈看完。10 个词判完出清单：**通过的义项进「将勾选」**，勾选确认后一次写盘、一份备份。工具栏可切反馈语言（写进本轮状态、刷新后保持）、「暂停」（保留全部进度并落盘）／「继续本轮」／「放弃本轮」／「放弃并重开」；本轮还在跑时「开始学习」会收起来，要重来就点「放弃并重开」。进度实时落盘，刷新或重启服务都能接着考；池子里不足 10 个词就抽多少算多少。
 - **复习**：工具栏同样只有反馈语言与「开始复习」。从「整词已掌握」的词里随机抽 30 个，**没有看词段**，直接进测试段——卡片、判定与翻页跟学习模式同一套。出清单时方向相反：**没通过的义项进「将取消」**，勾选确认后一次写盘、一份备份。其余（每条三次机会、暂停、跨重启续测、结算要勾选确认）与学习模式一致。**同一时刻只有一轮**：学习那轮没结束时，复习面板会写「学习模式的那一轮还没结束，去『学习』面板接着做」，这时点「开始复习」会被服务端挡下并说明原因。
-- **设置**：默认模型（候选来自 `settings.json` 的 `extraModels`）、两套提示词覆盖与「恢复默认」（补齐义项、判定；清空即默认，固定契约只读展示在最后）、反馈语言、主题。「模型」这一块分两组：上面一行只放**默认模型**（现在用哪个），下面一组是**新增候选**（模型名 + 接入点 + 密钥 + 添加，外加一整行的附加参数 JSON）；候选列表只列已有模型，不再重复一句「默认模型：xxx」。模型区可「添加」「测试连通」「打开 .env」「打开 settings.json」，并明确提示工具不写 `.env`。
+- **设置**：**词表文件**（指向真实的 `Vocabulary.md`，保存后立即生效；留空或文件不存在会被驳回，备注里会写出当前状况）、默认模型（候选来自 `settings.json` 的 `extraModels`）、两套提示词覆盖与「恢复默认」（补齐义项、判定；清空即默认，固定契约只读展示在最后）、反馈语言、主题。「模型」这一块分两组：上面一行只放**默认模型**（现在用哪个），下面一组是**新增候选**（模型名 + 接入点 + 密钥 + 添加，外加一整行的附加参数 JSON）；候选列表只列已有模型，不再重复一句「默认模型：xxx」。模型区可「添加」「测试连通」「打开 .env」「打开 settings.json」，并明确提示工具不写 `.env`。
 - **深浅色**：`html[data-theme]` 加 CSS 变量。`auto` 跟随 `prefers-color-scheme`，头部按钮在浅色、深色、跟随系统之间循环并写回设置；`<head>` 内联脚本先读 `localStorage` 定色，避免首帧闪白。
 - **窄屏（≤920px）**：左侧栏收成顶部一条横向导航（品牌名藏起来、导航项的小字注释也藏起来），这条**吸顶**，往下滚也能直接切面板；掌握概览压成一行「共 N 词 · M 条义项」，两张进度条在窄屏下不显示（数字去词表的统计砖看），因为它自带 111px、是顶部显得特别大的主因。面板名那张顶栏（`.topbar`）在窄屏下改成随页面滚走，不再吸顶——两行都吸会永久吃掉一百多像素。**这两条都设成不换行**（`flex: none` + `nowrap`），宽度不够时缩字号（`clamp()` 跟着 `vw` 连续变化）而不是换行、也不出横向滚动条。再窄就一层层让位，阈值按「实测刚好塞不下」定，不提前藏：≤360px 才藏掉概览（数字词表里有）与面板名（当前导航项已写着是哪个面板）、≤340px 藏掉「模型」两个字只留下拉。361px 以上概览与面板名都在，300px 以上始终单行且无滚动条，再窄才会出现滚动条（那已经比常见手机还窄）。义项行也在这档改版式：例句独占一行，释义跟在档位后面占满余下的宽度。
 
@@ -346,21 +347,18 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 ## 5. 配置与密钥
 
-`.env` 只放密钥、词表路径与端口，由你手工维护，工具绝不写它，改了要重启服务才生效：
+`.env` 只放密钥与端口，由你手工维护，工具绝不写它，改了要重启服务才生效：
 
 ```
 # 密钥，名字自取（settings.json 里每个模型用 keyName 指向其中一把）
 VOCAB_KEY_QWEN=<DashScope 的 key>
 VOCAB_KEY_ZHIPU=<智谱的 key>
 
-# 词表位置。推荐指向 Obsidian 库里的真身，Obsidian 手改和工具写入都走它
-VOCAB_FILE=<你的词表绝对路径，例如 D:/Notes/Vocabulary.md>
-
 PORT=5317
 ```
 
 - **不要把 key 打进 shell 命令行。** 权限层会拦，而且没必要，服务端自己读。
-- `VOCAB_FILE` 留空或指向本目录时，默认用本目录的 `Vocabulary.md`，也就是那个软链。换机器、把整个文件夹拷过去就能独立跑（见 §8 的「复制到别处」）。
+- **词表路径不在 `.env` 里**（2026-09-30 起）：它只存在设置页，也就是 `settings.json` 的 `vocabFile`——一个地方，改完保存立即生效，不用重启。换机器时把设置页那条路径填对就行。
 - **模型全平级（D16）**：`settings.json` 的 `extraModels` 里每条是 `{name, baseUrl, keyName, extra}`。`baseUrl` 必填，是该模型自己的 http(s) 接入点，末尾误带 `/chat/completions` 会被剥掉；`keyName` 必填，必须对应 `.env` 里某把 `VOCAB_KEY_名字`；`extra` 是可选的每模型附加参数 JSON 对象。不同厂商的互斥参数就靠它解决：qwen3.8-flash 带 `{"enable_thinking":false}`，智谱填 `{}` 即不带附加参数。按条目取接入点与钥匙，配错就报错并点名。
 - **密钥值只留在服务端**：`settings.json` 与所有 `/api/*` 响应里出现的都只是密钥名字，值不会露面，前端代码里也没有。加新模型等于 `.env` 加一把钥匙（如果还没有），再去设置页添一条带接入点的模型。
 - 其余可覆盖路径（一般用不上，测试沙盒用）：`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR`、`VOCAB_CEFR_FILE`。
@@ -378,17 +376,17 @@ PORT=5317
 | `test/vocab.test.js` | 35 | 无损往返（读真实词表逐字节校验主行与每条义项行）、`sortKey` 边界、插入位置与新建章节、**只接受新格式**（带框主行/无框义项行/`[]`/`·` 子行/孤儿子行都报错）、义项级勾选（单条/批量/词级）、`planSetEntry`（含只改第一条不丢义项）、`planSetSenses`、`planDeleteEntry`、`applyEdits` 重叠与越界拒绝、CRLF 保持 |
 | `test/ai.test.js` | 34 | 容错解析（裸 JSON / 围栏 / 前后带话 / 数组包裹）、重试策略（429 两次后成功、400 不重试、空回复重试）、义项契约（废数据丢弃、最多三条、`levelBasis` 归一）、判定规则与语言、`targetExample` 传参、考试模式只回代码、例句生成与校验、没吐出可解析 JSON 时再要一次 |
 | `test/server.test.js` | 57 | 全部路由的成功/校验/错误映射、密钥不外泄、`senses[].checked` 与词级 `checked`、判定义项、勾选义项写盘、批量标记掌握（一次写盘一份备份、跳过未知词、无变化不写盘）、学习与复习各一条完整轮次、重构与批量写盘、路径穿越与请求体上限、静态资源不带缓存且认 MIME（含 `public/js/` 下的模块） |
-| `test/config.test.js` | 6 | `.env` 解析、密钥与端口与路径覆盖、`vocabMirror` 的开关判据（同一文件才开、指到别处或目标不存在就关掉） |
-| `test/session.test.js` | 31 | 按模式分池（学习只取未掌握、复习只取已掌握）、抽词按词级整词入队、池子不足与空池、学习看词游标推进到底自动转测试段、复习没有看词段、**整词一张卡且逐义项判**、留空即不会（不花调用）、每条义项三次机会、上游半途失败保留已判结果、乱序与越界拒绝、reveal 只给已判完的义项、翻页门禁、跨过被删的词、结算方向（学习只勾选 / 复习只取消）、preview/commit（含中途删词跳过）、断点续测、旧版本状态文件被忽略、暂停/继续/放弃、语言切换 |
+| `test/config.test.js` | 3 | `.env` 解析、密钥与端口与路径覆盖、config 不再决定词表路径 |
+| `test/session.test.js` | 35 | 按模式分池（学习只取未掌握、复习只取已掌握）、抽词按词级整词入队、池子不足与空池、学习看词游标推进到底自动转测试段、复习没有看词段、**整词一张卡且逐义项判**、留空即不会（不花调用）、每条义项三次机会、上游半途失败保留已判结果、乱序与越界拒绝、reveal 只给已判完的义项、翻页门禁、跨过被删的词、结算方向（学习只勾选 / 复习只取消）、preview/commit（含中途删词跳过）、断点续测、旧版本状态文件被忽略、暂停/继续/放弃、语言切换 |
 | `test/cefr.test.js` | 17 | 括号剥离、词形归并、**词根推测（两轮剥前缀后缀、根不在表里就表外）**、常用度兜底、表外不猜、真实词表全量跑（命中率下限）、数据文件自检 |
-| `test/settings.test.js` | 13 | 白名单校验、未知提示词键被忽略、模型归一化、默认值 |
-| `test/store.test.js` | 16 | 备份轮转只留 20 份、写入抛错原文件不变、原子写、selfCheck 报错误行号、**硬链原处写入**、**软链写到真身而不是链接名**、**断链双向修复（谁新听谁）加重建链接类型** |
+| `test/settings.test.js` | 14 | 白名单校验、未知提示词键被忽略、模型归一化、默认值、`vocabFile` 必填（空串/空白被驳回、`null` 表示还没设置） |
+| `test/store.test.js` | 13 | 备份轮转只留 20 份、写入抛错原文件不变、原子写、selfCheck 报错误行号、**硬链原处写入**、**软链写到真身而不是链接名**、**`file` 传函数时每次重取目标（改了路径立刻生效）** |
 
-前端那七个模块是纯搬迁，`node --test` 兜不住，验收靠浏览器逐面板走一遍（沙盒配方见下面）。
+前端那八个模块是纯搬迁，`node --test` 兜不住，验收靠浏览器逐面板走一遍（沙盒配方见下面）。
 
-**人工端到端**（改完代码**必须重启服务**，Node 不热加载；只改 `public/` 刷新页面即可）：真 key 冒烟 1 词草稿加 1 次判定；沙盒副本上跑加词、学习、复习、考这个词、勾选、删除、重构各一条完整路径，`diff` 副本与原文件核对只有目标行变化，最后删副本。
+**人工端到端**（改完服务端代码**必须重启服务**，Node 不热加载；只改 `public/` 刷新页面即可）：真 key 冒烟 1 词草稿加 1 次判定；沙盒副本上跑加词、学习、复习、考这个词、勾选、删除、重构各一条完整路径，`diff` 副本与原文件核对只有目标行变化，最后删副本。
 
-沙盒配方（已验证）：把 `VOCAB_FILE`、`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR` 全指到 `%TEMP%/vocab-*` 里的副本，`PORT=5318`，跑完 `diff` 再删。镜像不必手动关：`VOCAB_FILE` 一指到副本，`vocabMirror` 判定两边不是同一个文件，自动变 `null`，真表不会被兜底逻辑碰到（启动日志会写「（无镜像）」）。
+沙盒配方（已验证）：把 `VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR` 指到 `%TEMP%/vocab-*` 里的副本，`PORT=5318`。**词表路径要一起换掉**：新拷的 `settings.json` 里若带着真表路径，就直接读写真表了——要么把那份副本里的 `vocabFile` 键删掉、让 `vocabFile: VOCAB_FILE=<沙盒副本>` 播种进去，要么把键值改成沙盒副本。启动后先看服务窗口第二行的「数据源」，确认是副本再动手。
 
 ---
 
@@ -433,19 +431,13 @@ VocabApp\             ← 代码 + 文档 + 配置，不在 Obsidian 库里
   tools/             build-cefr-data.mjs
   backups/           写盘前的快照（只留最近 20 份）
   .env settings.json VocabApp.bat package.json .gitignore .gitattributes
-  Vocabulary.md      ← 软链，指向下面那份真身
-Notes\Vocabulary.md  ← 真身，Obsidian 库那边只留这一个文件
+Notes\Vocabulary.md  ← 数据真身，Obsidian 库那边只留这一个文件
 ```
 
-- **为什么放个链接**：工具默认在自己目录里找 `Vocabulary.md`，放个链进去，文件夹看起来是自包含的；数据真身留在 Obsidian 库里，你在 Obsidian 里照旧能看、能手改。`.env` 里的 `VOCAB_FILE` 仍指向库里那份真身，两条路读写同一份文件。**两个位置都可以随便改**，工具读写前会按 §2.7 的规则把两边对齐。
-- **链接是软链**：它指向真身的路径，所以真身被「改名式保存」也能自动跟上（硬链在这种情况下会断）。建它要管理员权限或开发者模式，本机是用一次 UAC 建的；普通权限建不了，只能退硬链。重建命令大致是这样，把两个变量换成你自己的位置，会弹一次 UAC：
-  ```
-  $t='<真身路径>'; $m='VocabApp\Vocabulary.md'
-  powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-Command',\"Remove-Item '$m' -Force; New-Item -ItemType SymbolicLink -Path '$m' -Target '$t'\""
-  ```
-  真断了也不用管：工具下次读写会按「谁新听谁的」把两边修好。重建软链没权限时会退成硬链，内容仍是同一份，只是少了「改名也跟得上」这层保险。
-- **复制到别处**：把文件夹拷过去，**别带那个软链**（拷过去会变成悬空链接）。删掉它，在本地放一份自己的 `Vocabulary.md`，或把 `.env` 里的 `VOCAB_FILE` 指到目标机器上的词表，填上自己的 `VOCAB_KEY_*` 就能独立跑。想连数据一起带走，就拷一份真身文件放进目录、留空 `VOCAB_FILE`（默认就用本目录的 `Vocabulary.md`）。
-- **这是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，**私有**。`data/cefr.json` 与 `data/sources/` 里是 Oxford 3000/5000 与 Phrase List，只有个人自用授权，别转公开；真要公开，先得把这批数据摘出去，只留 `tools/build-cefr-data.mjs` 和源清单说明。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（软链指向库里的真身，换机器就废）。`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`VocabApp.bat` 单独用 CRLF。推送认证走 Git Credential Manager，本机已装，第一次推会弹窗选账号。
+- **词表路径在设置页里填**（`settings.json` 的 `vocabFile`）：指向上面那份真身，保存后立即生效。工具目录里**不再放软链**，也不再需要「两处对齐」——路径只有一个来源，就不存在两份内容分叉的可能。首次启动会做一次迁移：设置文件里还没有 `vocabFile` 这个键时，用 `.env` 的 `VOCAB_FILE` 填一次（本机就是那条指向库里的绝对路径）。
+- **路径必须指向一个真实文件**：保存时服务端会检查，不存在就报 `badVocabFile` 驳回；留空也驳回。设置页上那条备注会写出当前的状况（「还没设置词表路径」或「找不到这个文件：…」）。
+- **复制到别处**：把文件夹拷过去，改设置页里的路径指向目标机器上的词表，填上自己的 `VOCAB_KEY_*` 就能独立跑。想连数据一起带走，就拷一份真身文件放进目录、把路径填成它。
+- **这是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，**私有**。`data/cefr.json` 与 `data/sources/` 里是 Oxford 3000/5000 与 Phrase List，只有个人自用授权，别转公开；真要公开，先得把这批数据摘出去，只留 `tools/build-cefr-data.mjs` 和源清单说明。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（最后这条是历史遗留：早先在工具目录放软链，现在路径在设置里，留着它防的是「有人在目录里放了一份副本被误提交」）。`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`VocabApp.bat` 单独用 CRLF。推送认证走 Git Credential Manager，本机已装，第一次推会弹窗选账号。
 - **数据那边是 Obsidian 库**：你会同时手改 `Vocabulary.md`，所以 §2.7 的「外科手术式行编辑」不能省。
 - **Bash 工具的默认 cwd 指向已失效的旧 OneDrive 路径**，调用 Bash 必须显式传工作目录，通常就是本目录。
 - 权限层（auto mode）会拦：shell 里明文带 key、写含密钥的文件、用 `..` 相对路径访问 vault 内文件。绕行办法是绝对路径加 `.env` 由服务端读取。
