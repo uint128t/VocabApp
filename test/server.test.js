@@ -191,7 +191,6 @@ test('loadConfig reads a .env file and applies defaults', () => {
   const cfg = loadConfig({ dir, env: {} });
   assert.deepEqual(cfg.keys, { TEST: 'sk-test' });
   assert.deepEqual(cfg.keyNames, ['TEST']);
-  assert.equal(cfg.port, 5317);
   assert.equal(cfg.backupDir, path.join(dir, 'backups'));
   assert.equal(loadConfig({ dir, env: { VOCAB_BACKUP_DIR: path.join(dir, 'elsewhere') } }).backupDir, path.join(dir, 'elsewhere'));
 });

@@ -4,6 +4,8 @@ export const DEFAULTS = {
   extraModels: [],
   lang: 'zh',
   theme: 'auto',
+  port: 5317,
+  lanAccess: false,
   prompts: { entry: null, judge: null },
 };
 
@@ -96,6 +98,19 @@ function mergeSettings(current, patch, { keyNames } = {}) {
     if ('theme' in patch) {
       if (!THEMES.has(patch.theme)) throw new Error('theme 只能是 auto、light 或 dark');
       next.theme = patch.theme;
+    }
+    // 端口与访问范围（D44）：保存后要重启服务才生效，所以这里只管存得对。
+    // 设置页的数字框交来的是字符串，数字串也收；其余形态一律驳回。
+    if ('port' in patch) {
+      const n = typeof patch.port === 'string' ? Number(patch.port.trim()) : patch.port;
+      if (!Number.isInteger(n) || n < 1024 || n > 65535) {
+        throw new Error('port 必须是 1024–65535 之间的整数');
+      }
+      next.port = n;
+    }
+    if ('lanAccess' in patch) {
+      if (typeof patch.lanAccess !== 'boolean') throw new Error('lanAccess 必须是布尔值');
+      next.lanAccess = patch.lanAccess;
     }
     if ('prompts' in patch) {
       const p = patch.prompts;

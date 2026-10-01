@@ -33,8 +33,29 @@ test('defaults apply when there is no settings file', () => {
     extraModels: [],
     lang: 'zh',
     theme: 'auto',
+    port: 5317,
+    lanAccess: false,
     prompts: { entry: null, judge: null },
   });
+});
+
+test('port and lanAccess validate: 数字串收、越界与非整数驳回、驳回了不动盘', () => {
+  const { file, settings } = setup();
+  const ok = settings.patch({ port: '5318', lanAccess: true });
+  assert.equal(ok.error, null);
+  assert.equal(ok.settings.port, 5318, '设置页交来的是字符串，转成数字落盘');
+  assert.equal(ok.settings.lanAccess, true);
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(written.port, 5318);
+  assert.equal(written.lanAccess, true);
+
+  const before = fs.readFileSync(file);
+  for (const bad of ['abc', '', '   ', 80, 70000, 5317.5, null, true, [5318]]) {
+    assert.equal(settings.patch({ port: bad }).error.code, 'badSettings', JSON.stringify(bad));
+  }
+  assert.equal(settings.patch({ lanAccess: 'yes' }).error.code, 'badSettings');
+  assert.deepEqual(fs.readFileSync(file), before, '非法值一个字节都不写');
+  assert.equal(settings.get().settings.port, 5318);
 });
 
 test('vocabFile 必填：空串与空白被驳回，null 只表示还没设置', () => {

@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -876,11 +877,23 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     getPrompts: () => settings.get().settings.prompts,
     getEndpoints: () => modelEndpoints({ settings: settings.get().settings, keys: config.keys }),
   });
-  createApp({ store, config, ai, settings }).listen(config.port, '127.0.0.1', () => {
-    const s = settings.get();
-    console.log(`Vocabulary 助手已就绪：http://127.0.0.1:${config.port}`);
-    console.log(`数据源：${s.settings.vocabFile || '（还没设置，请在设置页填词表路径）'}`);
-    console.log(`生效模型：${s.settings.model || '（未设置，请在设置页选择）'}${s.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
+  // 端口与访问范围在设置里（D44）：settings.json 的 port 与 lanAccess，改完要重启才生效——
+  // listen 只在启动时发生一次。lanAccess 开着监听 0.0.0.0，同一网络里的手机就能打开；
+  // 服务没有鉴权，这个口只该开在自家网络里。
+  const current = settings.get();
+  const port = current.settings.port;
+  const host = current.settings.lanAccess ? '0.0.0.0' : '127.0.0.1';
+  createApp({ store, config, ai, settings }).listen(port, host, () => {
+    console.log(`Vocabulary 助手已就绪：http://127.0.0.1:${port}`);
+    if (current.settings.lanAccess) {
+      const ips = Object.values(os.networkInterfaces())
+        .flat()
+        .filter((a) => a && a.family === 'IPv4' && !a.internal)
+        .map((a) => a.address);
+      console.log(`局域网访问已开启：同一网络里的设备用 http://${ips[0] || '<本机IP>'}:${port} 打开（服务没有密码，别在公共网络开）`);
+    }
+    console.log(`数据源：${current.settings.vocabFile || '（还没设置，请在设置页填词表路径）'}`);
+    console.log(`生效模型：${current.settings.model || '（未设置，请在设置页选择）'}${current.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
     if (!config.keyNames?.length) console.log('提示：.env 里没有任何 VOCAB_KEY_名字=… 密钥，加词与自测暂不可用');
   });
 }

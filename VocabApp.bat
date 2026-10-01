@@ -2,9 +2,6 @@
 setlocal
 cd /d "%~dp0"
 
-set PORT=5317
-for /f "usebackq tokens=1,* delims==" %%a in (".env") do if /i "%%a"=="PORT" set PORT=%%b
-
 where node >nul 2>nul
 if errorlevel 1 (
   echo [X] node not found. Install Node.js or add it to PATH.
@@ -17,7 +14,12 @@ if not exist .env (
   exit /b 1
 )
 
-netstat -ano | findstr /c:"127.0.0.1:%PORT%" | findstr LISTENING >nul
+rem The port lives in settings.json (settings page). Fall back to 5317 when the
+rem file is missing or unreadable. LAN binding is also a settings-page toggle.
+set PORT=5317
+for /f "usebackq delims=" %%p in (`node -e "try{const p=require('./settings.json').port;process.stdout.write(String(p>=1024&&p<=65535?p:5317))}catch(e){process.stdout.write('5317')}" 2^>nul`) do set PORT=%%p
+
+netstat -ano | findstr LISTENING | findstr /c:":%PORT% " >nul
 if not errorlevel 1 (
   echo [i] Already running on port %PORT%. Opening the browser.
   start "" "http://127.0.0.1:%PORT%/"

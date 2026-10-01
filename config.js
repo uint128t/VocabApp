@@ -31,6 +31,5 @@ export function loadConfig({ dir = import.meta.dirname, env = process.env } = {}
     backupDir: src.VOCAB_BACKUP_DIR || path.join(dir, 'backups'),
     settingsFile: src.VOCAB_SETTINGS_FILE || path.join(dir, 'settings.json'),
     stateDir: src.VOCAB_STATE_DIR || path.join(dir, '.state'),
-    port: Number(src.PORT || 5317),
   };
 }

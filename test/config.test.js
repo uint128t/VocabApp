@@ -19,7 +19,7 @@ test('parseEnv keeps key=value pairs and ignores comments and blanks', () => {
   });
 });
 
-test('loadConfig picks up keys, port and the path overrides', () => {
+test('loadConfig picks up keys and the path overrides, but no longer the port', () => {
   const dir = sandbox();
   fs.writeFileSync(path.join(dir, 'Vocabulary.md'), '### A\n');
   const c = loadConfig({
@@ -35,7 +35,8 @@ test('loadConfig picks up keys, port and the path overrides', () => {
   });
   assert.deepEqual(c.keys, { QWEN: 'sk-one', ZHIPU: 'sk-two' });
   assert.deepEqual(c.keyNames, ['QWEN', 'ZHIPU']);
-  assert.equal(c.port, 5318);
+  // 端口归 settings.json 的 port 管（D44）：.env 里的 PORT 从此只是没人读的死数据
+  assert.equal(c.port, undefined);
   assert.equal(c.backupDir, 'X:/backups');
   assert.equal(c.stateDir, 'X:/state');
 });

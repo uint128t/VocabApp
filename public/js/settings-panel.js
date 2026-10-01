@@ -75,6 +75,8 @@ export function setPanelsReload(fn) {
 
 async function saveSettings(patch, notice) {
   const before = settings ? settings.vocabFile : null;
+  const beforePort = settings ? settings.port : null;
+  const beforeLan = settings ? settings.lanAccess : null;
   setSaveState('保存中…');
   try {
     const body = await api('/api/settings', {
@@ -83,12 +85,14 @@ async function saveSettings(patch, notice) {
       body: JSON.stringify(patch),
     });
     const switched = body.settings.vocabFile !== before;
+    // 端口与访问范围只在启动时读一次：改了它们要重启服务才生效（D44）。
+    const restart = body.settings.port !== beforePort || body.settings.lanAccess !== beforeLan;
     settings = body.settings;
     applyTheme(settings.theme);
     syncSettingDefaults();
     showVocabNote(body.vocabFileError);
-    setSaveState(`已保存 ${new Date().toLocaleTimeString()}`);
-    if (notice) toast(notice);
+    setSaveState(`已保存 ${new Date().toLocaleTimeString()}${restart ? ' · 端口/访问范围重启后生效' : ''}`);
+    if (notice) toast(restart ? `${notice} · 端口或访问范围改了，重启服务后生效` : notice);
     if (switched && vocabFileReload) await vocabFileReload();
     if (panelsReload) await panelsReload();
     return true;
@@ -149,6 +153,8 @@ async function loadSettings() {
     $('#keyFlag').hidden = Boolean(body.hasKey);
     $('#vocabFile').value = body.vocabFile || '';
     showVocabNote(body.vocabFileError);
+    $('#setPort').value = String(settings.port ?? 5317);
+    $('#setLan').checked = Boolean(settings.lanAccess);
     fillSelect($('#newModelKey'), keyNames, keyNames[0]);
     $('#promptEntry').value = settings.prompts.entry || '';
     $('#promptJudge').value = settings.prompts.judge || '';
@@ -168,6 +174,9 @@ function settingsFromForm() {
     vocabFile: $('#vocabFile').value.trim(),
     theme: $('#setTheme').value,
     lang: $('#setLang').value,
+    // 端口交字符串让服务端统一校验（1024–65535 的整数），填坏了驳回时带明确文案
+    port: $('#setPort').value.trim(),
+    lanAccess: $('#setLan').checked,
     model: $('#setModel').value || null,
     extraModels: settings.extraModels,
     prompts: {
@@ -215,7 +224,7 @@ $('#saveSettings').addEventListener('click', () => {
 });
 $('#resetSettings').addEventListener('click', () =>
   saveSettings(
-    { model: null, extraModels: [], lang: 'zh', theme: 'auto', prompts: { entry: null, judge: null } },
+    { model: null, extraModels: [], lang: 'zh', theme: 'auto', port: 5317, lanAccess: false, prompts: { entry: null, judge: null } },
     '已恢复全部默认',
   ).then(loadSettings),
 );

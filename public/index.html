@@ -171,6 +171,17 @@
               </fieldset>
 
               <fieldset>
+                <legend>服务与访问</legend>
+                <div class="row">
+                  <label class="inline-field">端口
+                    <input id="setPort" class="count-num" type="number" min="1024" max="65535" step="1" />
+                  </label>
+                  <label class="check"><input id="setLan" type="checkbox" /> 允许局域网访问</label>
+                </div>
+                <p class="hint">这两项保存后要重启服务才生效（关掉服务窗口，再双击 VocabApp.bat）。勾上局域网访问后，同一 Wi-Fi 下的设备用 <code>http://本机IP:端口</code> 打开；本服务没有密码，只在你信任的网络里开。</p>
+              </fieldset>
+
+              <fieldset>
                 <legend>模型</legend>
                 <div class="row">
                   <label class="inline-field">默认模型 <select id="setModel" data-no-empty="1"></select></label>
@@ -194,7 +205,7 @@
                 </div>
                 <p class="hint">
                   模型全部平级地保存在 <code>settings.json</code>（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数，
-                  没有 .env 默认接入点。<code>.env</code> 只放密钥与 <code>PORT</code>：
+                  没有 .env 默认接入点。<code>.env</code> 只放密钥：
                   每把密钥用 <code>VOCAB_KEY_名字=…</code> 声明，界面只选名字、不读取也不写入密钥值。改了
                   <code>.env</code> 要重启服务才会生效。
                 </p>
