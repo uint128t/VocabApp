@@ -490,14 +490,14 @@ VocabApp\             ← 代码 + 文档 + 配置，不在 Obsidian 库里
   data/              cefr.json + sources/（CEFR 原始清单）
   tools/             build-cefr-data.mjs
   backups/           写盘前的快照（只留最近 30 份）
-  .env settings.json VocabApp.bat package.json .gitignore .gitattributes
+  .env settings.json VocabApp.bat package.json LICENSE .gitignore .gitattributes
 Notes\Vocabulary.md  ← 数据真身，Obsidian 库那边只留这一个文件
 ```
 
 - **词表路径在设置页里填**（`settings.json` 的 `vocabFile`）：指向上面那份真身，保存后立即生效，必填。路径只有一个来源，工具目录里没有软链，也没有「两处对齐」这回事（所以第一次配置要在设置页把它填一次）。
 - **路径必须指向一个真实文件**：保存时服务端会检查，不存在就报 `badVocabFile` 驳回；留空也驳回。设置页上那条备注会写出当前的状况（「还没设置词表路径」或「找不到这个文件：…」）。
 - **复制到别处**：把文件夹拷过去，改设置页里的路径指向目标机器上的词表，填上自己的 `VOCAB_KEY_*` 就能独立跑。想连数据一起带走，就拷一份真身文件放进目录、把路径填成它。
-- **这是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，现在是**私有**。仓库里已经没有不可再分发的数据了（D43 把 Oxford 两源整层摘掉、词频骨架换成 CC BY-SA 的），要继续挂着私有是选择、不是许可所迫；哪天真要公开，还剩两件事：① **历史**——Oxford 两份与由它们构建的旧 `cefr.json` 从初始提交起就在历史里，公开前得用 `git filter-repo` 之类重写历史，或者干脆拿当前工作区新建一个仓库；② **署名**——§4.5 已经写明 CEFR-J 的出处与 Octanove、词频表、`data/cefr.json` 的 CC BY-SA 4.0，公开前核对一遍就行。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（最后这条是历史遗留：早先在工具目录放软链，现在路径在设置里，留着它防的是「有人在目录里放了一份副本被误提交」）。`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`VocabApp.bat` 单独用 CRLF。推送认证走 Git Credential Manager，本机已装，第一次推会弹窗选账号。
+- **这是 git 仓库，远端在 GitHub**：`github.com/uint128t/VocabApp`，**公开**。公开前做过两件事：① **历史**——Oxford 两份源文件与由它们构建的历版 `cefr.json`，从初始提交起都在 git 历史里，用 `git filter-repo` 摘干净了（`--invert-paths` 那四个路径），重建的 `cefr.json` 作为新提交放回来；② **署名与许可**——代码是 MIT（见 `LICENSE`），`data/` 下那份衍生数据按来源各自的条款走（CEFR-J 须注明出处、Octanove 与词频表 CC BY-SA 4.0，所以 `data/cefr.json` 按 CC BY-SA 4.0 分发），§4.5 与 `LICENSE` 里都写了。`.gitignore` 挡掉 `.env`、`settings.json`、`backups/`、`.state/` 和 `Vocabulary.md`（最后这条是历史遗留：早先在工具目录放软链，现在路径在设置里，留着它防的是「有人在目录里放了一份副本被误提交」）。`.gitattributes` 把换行钉成 LF（`data/sources/*.csv` 参与 `cefr.json` 构建，换行飘了数值会变），`VocabApp.bat` 单独用 CRLF。推送认证走 Git Credential Manager，本机已装，第一次推会弹窗选账号。
 - **数据那边是 Obsidian 库**：你会同时手改 `Vocabulary.md`，所以 §2.7 的「外科手术式行编辑」不能省。
 - **Bash 工具的默认 cwd 指向已失效的旧 OneDrive 路径**，调用 Bash 必须显式传工作目录，通常就是本目录。
 - 权限层（auto mode）会拦：shell 里明文带 key、写含密钥的文件、用 `..` 相对路径访问 vault 内文件。绕行办法是绝对路径加 `.env` 由服务端读取。
