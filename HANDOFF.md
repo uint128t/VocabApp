@@ -14,7 +14,7 @@
 
 连带清掉的：`config.vocabMirror`、`store.syncMirror()` 与那套 mtime 双向仲裁、对应的 4 条 store 单测与 3 条 config 单测、工具目录里的 `Vocabulary.md` 软链。**保留**的是写盘时的链接感知（软链先 `realpath` 再写、硬链原处覆盖写）——设置里那个路径本身可能就是个链接。另外两个测试文件（`vocab.test.js`、`cefr.test.js`）原先直接读 `<项目>/Vocabulary.md`，现在改成读 `settings.json` 的 `vocabFile`（新增 `test/real-vocab.js`，找不到就报错而不是悄悄跳过）。测试 212 → **209**。
 
-`.env` 里那行 `VOCAB_FILE` 我删不了（权限层禁止任何工具读写 `.env`），得用户自己删——代码已经完全不读它了。用户当前的 `settings.json` 里我已经把 `vocabFile` 补上了（`C:/Users/Victor/Other/Notes/Vocabulary.md`），不用他手填。
+`.env` 里那行 `VOCAB_FILE` 我删不了（权限层禁止任何工具读写 `.env`），得用户自己删——代码已经完全不读它了。用户当前的 `settings.json` 里 `vocabFile` 已经填好了，不用他手填。
 
 ## 这一轮做了什么（学习 / 复习取代自测 / 整测）
 
