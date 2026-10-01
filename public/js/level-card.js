@@ -20,7 +20,7 @@ function stepBox(title, detail) {
 function tiersText(tiers) {
   if (!tiers || !tiers.length) return '没有可查的表';
   const hits = tiers.filter((t) => t.plain || t.pos.length);
-  if (!hits.length) return '四张表都没命中';
+  if (!hits.length) return `这几张表都没命中（${tiers.map((t) => t.source).join('、')}）`;
   return hits
     .map((t) => {
       const head = `${t.source} ${t.plain || t.pos[0].level}`;
@@ -39,7 +39,7 @@ function derivedText(list) {
 }
 
 function freqText(trace) {
-  if (!trace || !trace.rank) return '不在 2 万常用词内';
+  if (!trace || !trace.rank) return '不在词频表内';
   return `第 ${trace.rank} 位 → 按区间推算 ${trace.band || '—'}`;
 }
 

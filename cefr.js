@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-const TIER = ['cefrj', 'octanove', 'oxford', 'phrase'];
+// 词表按可信度排：CEFR-J 是 CEFR-J 项目的正式产出，Octanove 补 C1/C2。这两张表都是单词表，
+// 词形归并与词根推测也在它们身上试（短语表已随 Oxford 两源一并摘掉，见 tools/build-cefr-data.mjs）。
+const TIER = ['cefrj', 'octanove'];
 
 export const SOURCES = {
   cefrj: 'CEFR-J',
   octanove: 'Octanove C1/C2',
-  oxford: 'Oxford 3000/5000',
-  phrase: 'Oxford Phrase List',
   freq: '按常用度推算',
 };
 
@@ -135,8 +135,6 @@ export function createIndex(data) {
   const lists = {
     cefrj: data.lists.cefrj,
     octanove: data.lists.octanove,
-    oxford: data.lists.oxford,
-    phrase: data.lists.phrase,
   };
   const byPos = new Map();
   for (const [name, list] of Object.entries(lists)) {
@@ -193,12 +191,12 @@ export function lookup(index, raw) {
   if (!/\s/.test(base)) {
     const lemmas = lemmaCandidates(base);
     for (const candidate of lemmas) {
-      const viaLemma = fromList(index, candidate, ['cefrj', 'octanove', 'oxford']);
+      const viaLemma = fromList(index, candidate, TIER);
       if (viaLemma) return { ...viaLemma, viaLemma: candidate, how: `lemma-${viaLemma.how}` };
     }
     for (const candidate of familyCandidates(base)) {
       if (lemmas.includes(candidate)) continue;
-      const viaRoot = fromList(index, candidate, ['cefrj', 'octanove', 'oxford']);
+      const viaRoot = fromList(index, candidate, TIER);
       if (viaRoot) return { ...viaRoot, viaRoot: candidate, how: `root-${viaRoot.how}` };
     }
     const rank = index.rank.get(base);
@@ -229,7 +227,7 @@ export function traceLookup(index, raw) {
   const lemmas = lemmaCandidates(base);
   const families = familyCandidates(base).filter((f) => !lemmas.includes(f));
   const derived = (form, via) => {
-    const hit = fromList(index, form, ['cefrj', 'octanove', 'oxford']);
+    const hit = fromList(index, form, TIER);
     return hit
       ? { form, via, level: hit.level, source: SOURCES[hit.source] || hit.source, how: hit.how, base: hit.base }
       : { form, via, level: null, source: null, how: null, base: null };
@@ -287,7 +285,7 @@ export function createCefr({ dataFile = path.join(import.meta.dirname, 'data', '
       const seen = new Set();
       const pushRelated = (form, via) => {
         if (seen.has(form)) return;
-        const hit = fromList(idx, form, ['cefrj', 'octanove', 'oxford']);
+        const hit = fromList(idx, form, TIER);
         if (!hit) return;
         seen.add(form);
         related.push({ form, level: hit.level, source: SOURCES[hit.source] || hit.source, via });

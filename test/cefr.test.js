@@ -72,7 +72,9 @@ test('a root-inferred hit says so and stays behind the plain lemma tier', () => 
   assert.match(lemma.label, /词形归并自 account/);
   assert.equal(lemma.viaRoot, undefined);
 
-  const unknown = cefr.lookup('feckless');
+  // 词频表扩到 50k 之后，「表外」的例子得挑一个连词频骨架都不收的词：feckless 现在能按
+  // 常用度推出来了（第 46033 位），ashen 三条路都不中，才是真的表外。
+  const unknown = cefr.lookup('ashen');
   assert.equal(unknown.level, null, '剥出来的词根也不在表里，就老老实实表外，不猜');
   assert.equal(unknown.label, 'CEFR 表外');
 });
@@ -97,17 +99,17 @@ test('a word outside every list is graded by calibrated frequency and says so', 
 });
 
 test('words and phrases with no CEFR home stay unmapped instead of being guessed', () => {
-  const abyss = cefr.lookup('abyss');
-  assert.equal(abyss.level, null);
-  assert.equal(abyss.label, 'CEFR 表外');
+  const outsider = cefr.lookup('beadwork');
+  assert.equal(outsider.level, null);
+  assert.equal(outsider.label, 'CEFR 表外');
   assert.equal(cefr.lookup('make ends meet').level, null);
   assert.equal(cefr.lookup('take ... for granted').level, null);
   assert.equal(cefr.lookup('').level, null);
 });
 
-test('Oxford supplies levels CEFR-J does not cover', () => {
+test('摘掉 Oxford 两源之后，它原来独有的词落到常用度推算上（2026-10-01）', () => {
   const hits = ['adaptation', 'authentic', 'bias'].map((w) => cefr.lookup(w));
-  assert.ok(hits.some((h) => h.source === 'oxford'), JSON.stringify(hits));
+  assert.ok(hits.every((h) => h.source === 'freq'), JSON.stringify(hits));
   assert.ok(hits.every((h) => CEFR_LEVELS.includes(h.level)));
 });
 
@@ -136,15 +138,15 @@ test('the shipped data file declares its sources and monotone frequency bands', 
   assert.equal(data.version, 1);
   assert.match(data.sources.cefrj, /CEFR-J/);
   assert.match(data.sources.octanove, /CC BY-SA/);
-  assert.match(data.sources.oxford, /Oxford/);
-  assert.match(data.sources.phrase, /Oxford Phrase List/);
+  assert.match(data.sources.freq, /CC BY-SA/);
+  assert.deepEqual(Object.keys(data.lists).sort(), ['cefrj', 'freq', 'octanove']);
   let prev = 0;
   for (const band of data.freqBands) {
     assert.ok(CEFR_LEVELS.includes(band.level), JSON.stringify(band));
     assert.ok(band.max > prev, `band 边界必须递增：${JSON.stringify(band)}`);
     prev = band.max;
   }
-  assert.equal(data.freqBands.at(-1).max, 20000);
+  assert.equal(data.freqBands.at(-1).max, data.lists.freq.split('\n').length);
 });
 
 test('createCefr refuses an unknown data version', () => {
@@ -164,29 +166,5 @@ test('the index is built once and reused', () => {
   assert.equal(sourceLabel(null), 'CEFR 表外');
 });
 
-test('the Oxford Phrase List grades multiword entries left over from the word lists', () => {
-  const phrase = cefr.lookup('on behalf of');
-  assert.equal(phrase.level, 'C1');
-  assert.equal(phrase.source, 'phrase');
-  assert.equal(phrase.label, 'Oxford Phrase List');
-  assert.equal(cefr.lookup('account for').source, 'phrase');
-  assert.equal(cefr.lookup('carry out').level, 'A2');
-});
 
-test('phrase entries carrying sb/sth placeholders still match a plain query', () => {
-  assert.equal(cefr.lookup('at the expense of').source, 'phrase');
-  assert.equal(cefr.lookup('subject to').source, 'phrase');
-  assert.equal(cefr.lookup('in case').source, 'phrase');
-});
 
-test('the phrase list never grades a single word', () => {
-  for (const word of ['absorb', 'agency', 'monetary', 'the']) {
-    const result = cefr.lookup(word);
-    assert.notEqual(result.source, 'phrase', word);
-  }
-  const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  const single = Object.keys(data.lists.phrase)
-    .map((k) => k.split('|')[0])
-    .filter((k) => k && !/ |…/.test(k));
-  assert.deepEqual(single, [], '短语表里不该有单词形态的键');
-});

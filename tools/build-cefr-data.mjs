@@ -1,3 +1,12 @@
+// 把 data/sources/ 里的三份来源拼成运行期只读的 data/cefr.json。
+// 换来源只改这里与 data/sources/，运行期接口（cefr.js）不动。
+//
+// 来源与许可（都要能再分发才放得进来）：
+//   · CEFR-J Vocabulary Profile 1.5 —— Tono Lab / TUFS，免费用于研究与商用、须注明出处；
+//   · Octanove Vocabulary Profile C1/C2 1.0 —— CC BY-SA 4.0（署名 + 同协议共享）；
+//   · FrequencyWords（hermitdave）OpenSubtitles 2018 en 50k —— 数据 CC BY-SA 4.0，只取排名。
+// 所以 data/cefr.json 本身按 CC BY-SA 4.0 发布。Oxford 3000/5000 与 Oxford Phrase List
+// 只有个人自用授权，2026-10-01 起整层摘掉（连带词频表换成上面那份 CC BY-SA 的）。
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -23,29 +32,6 @@ const readCsv = (file) =>
         .map((word) => ({ word, pos, level }));
     });
 
-const readPhraseList = (file) =>
-  fs
-    .readFileSync(path.join(srcDir, file), 'utf8')
-    .trim()
-    .split(/\r?\n/)
-    .slice(1)
-    .flatMap((line) => {
-      const cells = line.split(',');
-      const level = (cells[1] || '').trim().toUpperCase();
-      const phrase = (cells[0] || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      if (!phrase || !LEVELS.includes(level)) return [];
-      const stripped = phrase
-        .replace(/\([^)]*\)/g, ' ')
-        .replace(/…|\.\.\./g, ' ')
-        .replace(/[^a-z' ]/g, ' ')
-        .replace(/\bsb'?s\b|\bsb\b|\bsth\b|\bsomebody\b|\bsomething\b|\bone's\b/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const out = [{ word: phrase, pos: '', level }];
-      if (stripped && stripped !== phrase && stripped.includes(' ')) out.push({ word: stripped, pos: '', level });
-      return out;
-    });
-
 function index(rows) {
   const map = {};
   const set = (key, level) => {
@@ -62,17 +48,11 @@ function index(rows) {
 
 const cefrj = index(readCsv('cefrj-vocabulary-profile-1.5.csv'));
 const octanove = index(readCsv('octanove-vocabulary-profile-c1c2-1.0.csv'));
-const oxford = index(
-  JSON.parse(fs.readFileSync(path.join(srcDir, 'oxford-3000-5000-levels.json'), 'utf8')).map((r) => ({
-    word: r.word.trim().toLowerCase(),
-    pos: (r.pos || '').trim().toLowerCase(),
-    level: r.level,
-  })),
-);
-const phrase = index(readPhraseList('oxford-phrase-list.csv'));
 
+// 词频骨架：OpenSubtitles 语料的英文 50k，已压成「一行一个词、按频次降序」的纯字母词。
+// 它只提供排名，档位由下面的已知词中位数标定出来（所以换语料会让推算档略有位移）。
 const freq = fs
-  .readFileSync(path.join(srcDir, 'google-20000-english.txt'), 'utf8')
+  .readFileSync(path.join(srcDir, 'opensubtitles-en-50k.txt'), 'utf8')
   .trim()
   .split(/\r?\n/)
   .map((w) => w.trim().toLowerCase())
@@ -80,7 +60,7 @@ const freq = fs
 const rank = new Map(freq.map((w, i) => [w, i + 1]));
 
 const known = new Map();
-for (const list of [cefrj, octanove, oxford]) {
+for (const list of [cefrj, octanove]) {
   for (const [key, level] of Object.entries(list)) {
     if (key.includes('|')) continue;
     const cur = known.get(key);
@@ -116,16 +96,14 @@ const out = {
   sources: {
     cefrj: 'CEFR-J Vocabulary Profile 1.5 (Tono Lab, TUFS) — free use with citation',
     octanove: 'Octanove Vocabulary Profile C1/C2 1.0 — CC BY-SA 4.0',
-    oxford: 'The Oxford 3000/5000 by CEFR level — Oxford University Press, personal use',
-    phrase: 'The Oxford Phrase List (A1–C1) — Oxford University Press, personal use',
-    freq: 'google-10000-english 20k list (Google Trillion Word Corpus) — rank only, levels calibrated here',
+    freq: 'FrequencyWords (hermitdave) OpenSubtitles 2018 en 50k — CC BY-SA 4.0, rank only; bands calibrated here',
   },
   freqBands: bands,
-  lists: { cefrj, octanove, oxford, phrase, freq: freq.join('\n') },
+  lists: { cefrj, octanove, freq: freq.join('\n') },
 };
 
 fs.writeFileSync(path.join(dataDir, 'cefr.json'), JSON.stringify(out));
 const size = fs.statSync(path.join(dataDir, 'cefr.json')).size;
 console.log(`cefr.json ${(size / 1024).toFixed(0)}KB`);
-console.log(`cefrj ${Object.keys(cefrj).length} | octanove ${Object.keys(octanove).length} | oxford ${Object.keys(oxford).length} | freq ${freq.length}`);
+console.log(`cefrj ${Object.keys(cefrj).length} | octanove ${Object.keys(octanove).length} | freq ${freq.length}`);
 console.log('freq bands', JSON.stringify(bands));

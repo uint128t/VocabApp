@@ -38,8 +38,6 @@ const fakeCefr = ({ outside = [], levels = {} } = {}) => ({
     tiers: [
       { key: 'cefrj', source: 'CEFR-J', plain: outside.includes(word) ? null : levels[word] || 'B1', pos: [] },
       { key: 'octanove', source: 'Octanove C1/C2', plain: null, pos: [] },
-      { key: 'oxford', source: 'Oxford 3000/5000', plain: null, pos: [] },
-      { key: 'phrase', source: 'Oxford Phrase List', plain: null, pos: [] },
     ],
     lemma: [],
     root: [],
