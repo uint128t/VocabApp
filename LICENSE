@@ -19,17 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-例外：`data/` 下的内容是第三方数据，不适用上面的 MIT，各自按来源的条款：
-
-  - `data/cefr.json`、`data/sources/cefrj-vocabulary-profile-1.5.csv`
-    —— CEFR-J Vocabulary Profile 1.5，Tono Laboratory / TUFS，可免费用于研究与商用，
-       须注明出处；
-  - `data/sources/octanove-vocabulary-profile-c1c2-1.0.csv`
-    —— Octanove Vocabulary Profile C1/C2 1.0，CC BY-SA 4.0；
-  - `data/sources/opensubtitles-en-50k.txt`
-    —— FrequencyWords (hermitdave)，OpenSubtitles 2018 英文词频，数据 CC BY-SA 4.0。
-
-因此 `data/cefr.json` 作为上述数据的衍生作品，按 CC BY-SA 4.0 分发。
