@@ -125,10 +125,12 @@ export function parse(text) {
     if (!e.definition) {
       errors.push({ type: 'missingDefinition', line: e.lineStart + 1, word: e.word, raw: e.raw });
     }
-    e.checked = e.senses.length ? e.senses.every((s) => s.checked) : false;
+    // 掌握状态按义项推，分三档：一条都没勾是不掌握，全勾上才是完全掌握，中间那档是部分掌握。
+    const done = e.senses.filter((s) => s.checked).length;
+    e.mastery = !done ? 'none' : done === e.senses.length ? 'full' : 'partial';
   }
 
-  const checked = entries.filter((e) => e.checked).length;
+  const withMastery = (m) => entries.filter((e) => e.mastery === m).length;
   const senseCount = (pick) =>
     entries.reduce((n, e) => n + e.senses.filter((s) => pick(s.checked)).length, 0);
   const dupes = new Map();
@@ -158,8 +160,9 @@ export function parse(text) {
     errors,
     stats: {
       total: entries.length,
-      checked,
-      unchecked: entries.length - checked,
+      full: withMastery('full'),
+      partial: withMastery('partial'),
+      none: withMastery('none'),
       senses: {
         total: senseCount(() => true),
         checked: senseCount((c) => c),
@@ -203,7 +206,7 @@ const checkedFor = (sense, index, entry, fallback) => {
   if (sense.checked !== undefined) return sense.checked === true;
   if (fallback !== undefined) return fallback === true;
   const existing = entry && entry.senses[index];
-  return existing ? existing.checked === true : Boolean(entry && entry.checked);
+  return existing ? existing.checked === true : Boolean(entry && entry.mastery === 'full');
 };
 
 function err(code, message, details) {

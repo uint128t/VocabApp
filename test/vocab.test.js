@@ -30,7 +30,7 @@ test('real Vocabulary.md round-trips losslessly', () => {
   assert.equal(applyEdits(REAL, []), REAL);
   assert.ok(entries.length > 300);
   assert.equal(stats.total, entries.length);
-  assert.equal(stats.checked + stats.unchecked, entries.length);
+  assert.equal(stats.full + stats.partial + stats.none, entries.length);
   assert.equal(stats.missingExample, 0);
   assert.equal(stats.missingDifficulty, 0);
 
@@ -55,7 +55,7 @@ test('the real file keeps every state on its sense lines', () => {
     entries.every((e) => serializeHead(e) === `- ${e.segments.join(' - ')}`),
     '主行不该带勾选框',
   );
-  assert.equal(stats.checked, entries.filter((e) => e.senses.every((s) => s.checked)).length);
+  assert.equal(stats.full, entries.filter((e) => e.senses.every((s) => s.checked)).length);
   assert.equal(stats.senses.checked + stats.senses.unchecked, stats.senses.total);
   assert.equal(stats.senses.total, entries.reduce((n, e) => n + e.senses.length, 0));
 });
@@ -112,21 +112,30 @@ test('parses the entry format: bare head plus one boxed line per sense', () => {
   );
   assert.equal(e.difficulty, 'A2');
   assert.equal(e.example, 'The angle was 45 degrees.');
-  assert.equal(e.checked, false, '整词掌握 = 所有义项都勾');
+  assert.equal(e.mastery, 'partial', '勾了一条、另一条没勾 = 部分掌握');
   assert.equal(e.childLine, ls(t)[3]);
   assert.equal(serializeHead(e), '- angle');
   assert.equal(serializeSense(e.senses[1]), ls(t)[4]);
   assert.deepEqual(stats.senses, { total: 2, checked: 1, unchecked: 1 });
-  assert.equal(stats.checked, 0);
+  assert.deepEqual([stats.full, stats.partial, stats.none], [0, 1, 0]);
 });
 
-test('a word is only mastered when every sense is checked', () => {
+test('掌握状态分三档：全勾=完全掌握、部分勾=部分掌握、一条没勾=不掌握', () => {
   const all = fx(['### A', '', '- angle', '  - [x] #A2 - the space between two lines - The angle was 45 degrees.', '  - [x] #C1 - to fish - He angled his line carefully.', '']);
   const stats = parse(all).stats;
-  assert.equal(stats.checked, 1);
-  assert.equal(stats.unchecked, 0);
+  assert.equal(stats.full, 1);
+  assert.equal(stats.partial, 0);
+  assert.equal(stats.none, 0);
+  assert.equal(stats.total, 1);
   assert.deepEqual(stats.senses, { total: 2, checked: 2, unchecked: 0 });
-  assert.equal(parse(all).entries[0].checked, true);
+  assert.equal(parse(all).entries[0].mastery, 'full');
+
+  const none = fx(['### A', '', '- angle', '  - [ ] #A2 - the space between two lines - The angle was 45 degrees.', '  - [ ] #C1 - to fish - He angled his line carefully.', '']);
+  assert.equal(parse(none).entries[0].mastery, 'none');
+
+  // 一条义项的词只有「完全掌握」与「不掌握」两档，中间那档得有勾有没勾才成立。
+  const single = fx(['### A', '', '- lone', '  - [ ] #B1 - on its own - He sat alone.', '']);
+  assert.equal(parse(single).entries[0].mastery, 'none');
 });
 
 test('a sense line may carry a chinese gloss before the example', () => {
@@ -162,7 +171,7 @@ test('a head with no sense line has no definition', () => {
     [['missingDefinition', 3]],
   );
   assert.equal(parsed.entries[0].definition, '');
-  assert.equal(parsed.entries[0].checked, false);
+  assert.equal(parsed.entries[0].mastery, 'none');
 });
 
 test('parse reports duplicate words and duplicate chapters', () => {
@@ -371,8 +380,8 @@ test('sense checkbox writes flip exactly one box character', () => {
   assert.equal(applyEdits(out, set(out, true).edits), t);
   assert.equal(set(out, false).noop, true);
   assert.deepEqual(set(out, false).edits, []);
-  assert.equal(parse(out).stats.checked, 0);
-  assert.equal(parse(out).stats.unchecked, 1);
+  assert.equal(parse(out).stats.none, 1);
+  assert.equal(parse(out).stats.full, 0);
 });
 
 test('sense checkbox writes validate their input', () => {
@@ -415,11 +424,11 @@ test('the word level toggle sets every sense at once', () => {
     '  - [x] #C1 - to fish - He angled his line carefully.',
     '',
   ]);
-  assert.equal(parse(after).entries[0].checked, true);
+  assert.equal(parse(after).entries[0].mastery, 'full');
   assert.equal(planSetChecked(after, 'angle', true).noop, true);
 
   const off = applyEdits(after, planSetChecked(after, 'angle', false).edits);
-  assert.equal(parse(off).stats.checked, 0);
+  assert.equal(parse(off).stats.none, 1);
   assert.deepEqual(parse(off).entries[0].senses.map((s) => s.checked), [false, false]);
 });
 

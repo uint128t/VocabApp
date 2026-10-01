@@ -91,7 +91,7 @@ function project(e) {
     word: e.word,
     definition: e.definition,
     chinese: e.chinese ?? null,
-    checked: e.checked,
+    mastery: e.mastery,
     difficulty: e.difficulty,
     example: e.example,
     senses: (e.senses || []).map((s) => ({
@@ -107,7 +107,7 @@ function project(e) {
 const senseList = (e) =>
   e.senses.length
     ? e.senses
-    : [{ level: e.difficulty, definition: null, chinese: e.chinese ?? null, example: e.example, checked: e.checked }];
+    : [{ level: e.difficulty, definition: null, chinese: e.chinese ?? null, example: e.example, checked: false }];
 
 // 词表路径当前的状况：没填 / 不是文件 / 好着。设置页据此提示。
 function vocabFileProblem(p) {
@@ -590,7 +590,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       const entry = parse(text).entries.find((e) => e.word === word);
       if (!entry) throw httpError(404, 'wordNotFound', `未找到词头：${word}`);
       const current = {
-        checked: entry.checked,
+        checked: entry.mastery === 'full',
         headDefinition: entry.definition || null,
         headChinese: entry.chinese ?? null,
         senses: entry.senses.map((s) => ({
@@ -612,7 +612,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       }
       const senses = proposal.senses.map((s, i) => ({
         ...s,
-        checked: entry.senses[i] ? entry.senses[i].checked : entry.checked,
+        checked: entry.senses[i] ? entry.senses[i].checked : entry.mastery === 'full',
       }));
       const checked = senses.every((s) => s.checked);
       // 只探「结构上能不能写」：档位这会儿还是 null（等投票），拿它去探会一律报
@@ -666,7 +666,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         items.push({
           word,
           chapter: entry.chapter,
-          checked: entry.checked,
+          checked: entry.mastery === 'full',
           referenceLevels,
           trace: grades.trace(word),
           covered: referenceLevels.levels.length + referenceLevels.related.length,
@@ -858,7 +858,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       const { stats } = store.selfCheck();
       return {
         level: 'ok',
-        message: `${stats.total} 条 · ${stats.senses.total} 条义项 · 已掌握 ${stats.checked} 词 / ${stats.senses.checked} 义项`,
+        message: `${stats.total} 条 · ${stats.senses.total} 条义项 · 完全掌握 ${stats.full} 词 · 部分掌握 ${stats.partial} 词 · 已掌握 ${stats.senses.checked} 义项`,
       };
     } catch (e) {
       return { level: 'bad', message: e.message };

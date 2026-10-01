@@ -6,7 +6,7 @@ const DEFAULT_COUNT = { learn: 10, review: 30 };
 // 上限只是防呆：真给多了也会被池子截断，这个数字比任何池子都大。
 const COUNT_MAX = 500;
 const MODES = ['learn', 'review'];
-// v4：按模式分池（learn 抽未掌握、review 抽已掌握），学习模式多了「先看后考」两段。
+// v4：按模式分池（learn 抽「还有义项没掌握」的、review 抽「掌握过一些」的），学习模式多了「先看后考」两段。
 // v3 及更早的状态文件直接当作没有进行中的轮次。
 const STATE_VERSION = 4;
 let seq = 0;
@@ -54,11 +54,10 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
   const entries = () => parse(store.readFile()).entries;
   const wordIndex = () => new Map(entries().map((e) => [e.word, e]));
 
-  // 抽词按词级：整词都掌握了才算「已认识」，复习抽它、学习避开它。
-  const pool = (mode) => {
-    const want = mode === 'review';
-    return entries().filter((e) => Boolean(e.checked) === want);
-  };
+  // 抽词按词级，口径是三类掌握状态：复习抽「至少掌握过一条义项」的（部分掌握 + 完全掌握），
+  // 学习抽「还有义项没掌握」的（部分掌握 + 不掌握）。部分掌握两边都进——既值得复查，也还要学。
+  const pool = (mode) =>
+    entries().filter((e) => (mode === 'review' ? e.mastery !== 'none' : e.mastery !== 'full'));
 
   const mustState = () => {
     const state = load();
@@ -186,7 +185,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
     }));
     const queue = shuffle(drawn, random).slice(0, count);
     if (!queue.length) {
-      throw err('emptyScope', mode === 'review' ? '还没有整词已掌握的词可以复习' : '没有还有义项没掌握的词可以学');
+      throw err('emptyScope', mode === 'review' ? '还没有掌握过任何义项的词可以复习' : '没有还有义项没掌握的词可以学');
     }
 
     const state = {

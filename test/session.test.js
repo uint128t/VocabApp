@@ -179,9 +179,17 @@ test('池子不够就抽多少算多少，池子是空的直接报错', async ()
   const allOpen = table(many(3, false));
   await assert.rejects(allOpen.session.start({ mode: 'review' }), (e) => {
     assert.equal(e.code, 'emptyScope');
-    assert.match(e.message, /整词已掌握/);
+    assert.match(e.message, /还没有掌握过任何义项/);
     return true;
   });
+});
+
+test('部分掌握的词两个池子都进：复习抽得到，学习也还要学', async () => {
+  const partial = '### A\n\n- angle\n  - [x] #A2 - the space between two lines - The angle was 45 degrees.\n  - [ ] #C1 - to fish - He angled his line carefully.\n';
+  const learn = await table(partial).session.start({ mode: 'learn' });
+  assert.deepEqual(learn.queue, [word('angle', [0, 1])]);
+  const review = await table(partial).session.start({ mode: 'review' });
+  assert.deepEqual(review.queue, [word('angle', [0, 1])]);
 });
 
 test('mode 不是 learn/review 时直接拒绝', async () => {

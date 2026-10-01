@@ -85,8 +85,9 @@ test('GET /api/entries returns projected entries and stats', async () => {
   const body = await res.json();
   assert.deepEqual(body.stats, {
     total: 2,
-    checked: 1,
-    unchecked: 1,
+    full: 1,
+    partial: 0,
+    none: 1,
     senses: { total: 2, checked: 1, unchecked: 1 },
     missingExample: 0,
     missingDifficulty: 0,
@@ -96,7 +97,7 @@ test('GET /api/entries returns projected entries and stats', async () => {
     word: 'absorb',
     definition: 'take in',
     chinese: null,
-    checked: true,
+    mastery: 'full',
     difficulty: 'B1',
     example: 'Plants absorb water through their roots.',
     senses: [
@@ -110,7 +111,7 @@ test('GET /api/entries returns projected entries and stats', async () => {
     ],
   });
   assert.equal(body.entries[1].word, 'ballpoint');
-  assert.equal(body.entries[1].checked, false);
+  assert.equal(body.entries[1].mastery, 'none');
   assert.equal(body.entries[1].difficulty, 'B1');
 });
 
@@ -336,7 +337,7 @@ test('POST /api/commit-add writes the entry at the sorted position', async () =>
   assert.equal(res.status, 200);
   assert.equal(res.body.entry.chapter, 'A');
   assert.equal(res.body.entry.word, 'attic');
-  assert.equal(res.body.entry.checked, false);
+  assert.equal(res.body.entry.mastery, 'none');
   assert.match(res.body.backup, /^Vocabulary\./);
   assert.deepEqual(fs.readFileSync(file, 'utf8').split('\n'), [
     '### A',
@@ -699,7 +700,7 @@ test('POST /api/commit-edit leaves the sense checkbox alone unless asked', async
   await post(base, '/api/commit-edit', { word: 'cliché', definition: 'overused phrase', difficulty: 'C1', example: 'His speech was full of clichés.', checked: false });
   lines = fs.readFileSync(file, 'utf8').split('\n');
   assert.equal(lines[8], '  - [ ] #C1 - overused phrase - His speech was full of clichés.');
-  assert.equal((await (await fetch(`${base}/api/entries`)).json()).stats.checked, 0);
+  assert.equal((await (await fetch(`${base}/api/entries`)).json()).stats.full, 0);
 });
 
 test('POST /api/commit-edit refuses unknown words and bad fields', async () => {
@@ -719,7 +720,7 @@ test('POST /api/commit-delete removes the head and its child line', async () => 
   assert.equal(res.body.word, 'absorb');
   assert.equal(res.body.removed, 2);
   assert.equal(res.body.stats.total, 2);
-  assert.equal(res.body.stats.checked, 1);
+  assert.equal(res.body.stats.full, 1);
   assert.match(res.body.backup, /^Vocabulary\./);
   assert.deepEqual(fs.readFileSync(file, 'utf8').split('\n'), [
     '### A',
@@ -1052,19 +1053,19 @@ test('GET /api/entries exposes every sense with its own level and checkbox', asy
     { level: 'A2', definition: 'the space between two lines', chinese: null, example: 'The angle was 45 degrees.', checked: true },
   ]);
   assert.equal(body.entries[0].definition, 'the space between two lines');
-  assert.equal(body.entries[0].checked, true);
+  assert.equal(body.entries[0].mastery, 'full');
 
   const multi = await start(MULTI_FIXTURE);
   const half = await (await fetch(`${multi.base}/api/entries`)).json();
   assert.deepEqual(half.entries[0].senses.map((s) => s.checked), [false, false]);
-  assert.equal(half.entries[0].checked, false);
+  assert.equal(half.entries[0].mastery, 'none');
   await post(multi.base, '/api/set-checked', { word: 'angle', sense: 0, checked: true });
   const after = await (await fetch(`${multi.base}/api/entries`)).json();
   assert.deepEqual(after.entries[0].senses.map((s) => s.checked), [true, false]);
-  assert.equal(after.entries[0].checked, false, '还有一个义项没掌握，整词仍算未掌握');
+  assert.equal(after.entries[0].mastery, 'partial', '勾了一条、还剩一条没掌握 = 部分掌握');
   assert.deepEqual(after.stats.senses, { total: 2, checked: 1, unchecked: 1 });
-  assert.equal(after.stats.checked, 0);
-  assert.equal(after.stats.unchecked, 1);
+  assert.equal(after.stats.full, 0);
+  assert.equal(after.stats.partial, 1);
 });
 
 test('POST /api/commit-senses keeps each sense checkbox and boxes multi-sense lines', async () => {
