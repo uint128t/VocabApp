@@ -67,8 +67,9 @@
               <select id="difficulty" data-all-label="全部难度"><option value="">全部难度</option></select>
               <select id="mastery">
                 <option value="">掌握状态</option>
-                <option value="checked">义项全掌握</option>
-                <option value="unchecked">还有义项没掌握</option>
+                <option value="full">完全掌握</option>
+                <option value="partial">部分掌握</option>
+                <option value="none">不掌握</option>
               </select>
               <span class="spacer"></span>
               <span id="count" class="count"></span>
@@ -108,7 +109,7 @@
               <button id="learnRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
               <button id="learnAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
             </div>
-            <p class="hint">从「还有义项没掌握」的词里抽一批（数量看上面的滑块）：先一个一个把整词的义项与例句看一遍，看完再闭卷测这一轮，通过的义项进结算清单。</p>
+            <p class="hint">从「还有义项没掌握」的词里抽一批（部分掌握 + 不掌握，数量看上面的滑块）：先一个一个把整词的义项与例句看一遍，看完再闭卷测这一轮，通过的义项进结算清单。</p>
             <div id="learnCard" class="quiz-card" hidden></div>
             <div id="learnFeedback" class="job-result" hidden></div>
             <div id="learnResult" class="job-result" hidden></div>
@@ -131,7 +132,7 @@
               <button id="reviewRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
               <button id="reviewAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
             </div>
-            <p class="hint">从「整词已掌握」的词里抽一批（数量看上面的滑块）直接闭卷测，没通过的义项进结算清单等你取消勾选。</p>
+            <p class="hint">从「掌握过一些」的词里抽一批（部分掌握 + 完全掌握，数量看上面的滑块）直接闭卷测，没通过的义项进结算清单等你取消勾选。</p>
             <div id="reviewCard" class="quiz-card" hidden></div>
             <div id="reviewFeedback" class="job-result" hidden></div>
             <div id="reviewResult" class="job-result" hidden></div>

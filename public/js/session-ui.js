@@ -60,11 +60,12 @@ export function mountRound({ prefix, mode }) {
   const r = Object.fromEntries(REFS.map((name) => [name[0].toLowerCase() + name.slice(1), ref(name)]));
   const countKey = `vocab-count-${mode}`;
 
-  // 抽词滑块：上限跟着池子走（学习抽「还有义项没掌握」的，复习抽「整词已掌握」的），
-  // 池子不足时浏览器自己把滑块夹在上限上，服务端那边也会再截一次。
+  // 抽词滑块：上限跟着池子走（复习抽「掌握过一些」的，学习抽「还有义项没掌握」的——部分掌握两边都算），
+  // 池子不足时浏览器自己把滑块夹在上限上，服务端那边也会再截一次。部分掌握两个池子都进，
+  // 所以它的词会被算两次——那正是它的两份用处。
   function poolSize() {
-    const want = mode === 'review';
-    return listState.entries.filter((e) => Boolean(e.checked) === want).length;
+    const want = mode === 'review' ? 'none' : 'full';
+    return listState.entries.filter((e) => e.mastery !== want).length;
   }
 
   // 滑块与数字框是同一个值的两种输入：拖动同步数字框，填数字同步滑块，两边都落盘。

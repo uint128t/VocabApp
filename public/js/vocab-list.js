@@ -6,6 +6,9 @@ import { senseRow, readSenses, levelSourceLine, answerRow, voteAll, applyVote } 
 import { levelCard } from './level-card.js';
 import { settings } from './settings-panel.js';
 
+// 掌握状态三档的说法只有这一处：标签、筛选、行内文案都从这里取。
+const MASTERY_TEXT = { full: '完全掌握', partial: '部分掌握', none: '不掌握' };
+
 function visibleEntries() {
   const q = $('#q').value.trim().toLowerCase();
   const chapter = $('#chapter').value;
@@ -14,16 +17,15 @@ function visibleEntries() {
   return state.entries.filter((e) => {
     if (chapter && e.chapter !== chapter) return false;
     if (difficulty && !(e.senses || []).some((s) => s.level === difficulty)) return false;
-    if (mastery === 'checked' && !e.checked) return false;
-    if (mastery === 'unchecked' && e.checked) return false;
+    if (mastery && e.mastery !== mastery) return false;
     if (q && !text(e.word, e.definition, e.chinese).toLowerCase().includes(q)) return false;
     return true;
   });
 }
 
-function statTile(label, value, total, strong) {
+function statTile(label, value, total, kind = '') {
   const box = document.createElement('div');
-  box.className = strong ? 'stat ok' : 'stat';
+  box.className = kind ? `stat ${kind}` : 'stat';
   const b = document.createElement('b');
   b.textContent = String(value);
   box.append(b);
@@ -38,7 +40,8 @@ function statTile(label, value, total, strong) {
   return box;
 }
 
-function statBar(label, got, total) {
+// 一根进度条：`kind` 决定颜色（完全掌握 / 部分掌握 / 不掌握 / 已掌握的义项）。
+function statBar(label, got, total, kind = 'full') {
   const pct = total ? Math.round((got / total) * 100) : 0;
   const row = document.createElement('div');
   row.className = 'ov-row';
@@ -50,6 +53,7 @@ function statBar(label, got, total) {
   const track = document.createElement('div');
   track.className = 'ov-bar';
   const fill = document.createElement('i');
+  fill.className = kind;
   fill.style.width = `${pct}%`;
   track.append(fill);
   return [row, track];
@@ -59,17 +63,24 @@ function renderStats() {
   const s = state.stats;
   const n = s.senses || { total: 0, checked: 0, unchecked: 0 };
   $('#stats').replaceChildren(
-    statTile('词', s.total, null, false),
-    statTile('条义项', n.total, null, false),
-    statTile('已掌握词', s.checked, s.total, true),
-    statTile('已掌握义项', n.checked, n.total, true),
-    statTile('未掌握词', s.unchecked, s.total, false),
-    statTile('未掌握义项', n.unchecked, n.total, false),
+    statTile('词', s.total, null),
+    statTile('条义项', n.total, null),
+    statTile('完全掌握', s.full, s.total, 'ok'),
+    statTile('部分掌握', s.partial, s.total, 'partial'),
+    statTile('不掌握', s.none, s.total),
+    statTile('已掌握义项', n.checked, n.total, 'ok'),
+    statTile('未掌握义项', n.unchecked, n.total),
   );
   const head = document.createElement('div');
   head.className = 'ov-head';
   head.textContent = `共 ${s.total} 词 · ${n.total} 条义项`;
-  $('#overview').replaceChildren(head, ...statBar('词', s.checked, s.total), ...statBar('义项', n.checked, n.total));
+  $('#overview').replaceChildren(
+    head,
+    ...statBar('完全掌握', s.full, s.total, 'full'),
+    ...statBar('部分掌握', s.partial, s.total, 'partial'),
+    ...statBar('不掌握', s.none, s.total, 'none'),
+    ...statBar('已掌握义项', n.checked, n.total, 'full'),
+  );
 }
 
 function editForm(entry, li) {
@@ -80,7 +91,7 @@ function editForm(entry, li) {
   list.className = 'sense-list';
   const senses = entry.senses.map((s, i) =>
     i === 0 && !s.definition && !s.chinese && entry.definition
-      ? { ...s, definition: entry.definition, checked: s.checked === undefined ? entry.checked : s.checked }
+      ? { ...s, definition: entry.definition, checked: s.checked === undefined ? entry.mastery === 'full' : s.checked }
       : s,
   );
   for (const sense of senses) list.append(senseRow(entry, sense, { withCheck: true }));
@@ -111,7 +122,7 @@ function editForm(entry, li) {
   chk.checked = senses.every((s) => s.checked);
   const mastery = document.createElement('label');
   mastery.className = 'row-inline';
-  mastery.title = '整词已掌握 = 每一行义项都勾上';
+  mastery.title = '勾上 = 这个词的每条义项都算掌握（完全掌握）；只勾一部分就是部分掌握';
   mastery.append(chk, document.createTextNode(' 全部义项已掌握'));
   chk.addEventListener('change', () => {
     for (const box of list.querySelectorAll('.sense-check')) box.checked = chk.checked;
@@ -202,7 +213,8 @@ let selectionMode = false;
 
 function entryNode(e) {
   const li = document.createElement('li');
-  li.className = text('entry', e.checked && 'checked');
+  // 完全掌握的词头压暗（早就认识的不用反复看）；三档的区分靠词头后面那枚标签。
+  li.className = text('entry', e.mastery === 'full' && 'checked');
 
   const word = document.createElement('span');
   word.className = 'word';
@@ -230,7 +242,17 @@ function entryNode(e) {
     head.append(zh);
   }
 
-  // 词头这行不标档位：档位是按义项来的，只写在义项行上。
+  // 词头这行标掌握状态、不标档位：档位是按义项来的，只写在义项行上。部分掌握顺带写
+  // 「勾了几条 / 共几条」，一眼能看出还差多少。
+  const masteryTag = document.createElement('span');
+  masteryTag.className = 'tag';
+  masteryTag.dataset.mastery = e.mastery;
+  masteryTag.textContent =
+    e.mastery === 'partial'
+      ? `${MASTERY_TEXT.partial} ${e.senses.filter((s) => s.checked).length}/${e.senses.length}`
+      : MASTERY_TEXT[e.mastery];
+  head.append(masteryTag);
+
   const edit = document.createElement('button');
   edit.type = 'button';
   edit.className = 'edit-btn';
@@ -361,10 +383,7 @@ function wordCheckCard(e, li) {
   title.textContent = e.word;
   const meta = document.createElement('span');
   meta.className = 'card-status';
-  meta.textContent = [
-    `${(e.senses || []).length} 条义项`,
-    e.checked ? '整词已掌握' : '还有义项没掌握',
-  ].join(' · ');
+  meta.textContent = [`${(e.senses || []).length} 条义项`, MASTERY_TEXT[e.mastery]].join(' · ');
   head.append(title, meta);
 
   const hint = document.createElement('p');
