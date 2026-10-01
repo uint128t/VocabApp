@@ -539,6 +539,15 @@ function renderList() {
   list.innerHTML = '';
   const shown = visibleEntries();
   const frag = document.createDocumentFragment();
+  if (!shown.length) {
+    // 筛选落空时给一句话，别剩一个白框让人猜是坏了还是真没有。
+    const empty = document.createElement('li');
+    empty.className = 'list-empty';
+    empty.textContent = state.entries.length
+      ? '没有符合条件的词：换一个筛选，或清空搜索。'
+      : '词表还是空的：去「加词」生成第一张草稿卡。';
+    frag.append(empty);
+  }
   for (const e of shown) frag.append(entryNode(e));
   list.append(frag);
   $('#count').textContent = `显示 ${shown.length} / ${state.entries.length}`;
@@ -613,8 +622,9 @@ function setSelectionMode(on) {
 async function markSelection(checked) {
   const words = [...selected];
   if (!words.length) return;
-  const btns = ['#markChecked', '#markUnchecked', '#refactorBtn'].map((id) => $(id));
-  for (const b of btns) b.disabled = true;
+  // 批量标记也是一条批量：跑着的这一下里，其余批量按钮照 D41 的规矩一起锁住。
+  batchBusy = true;
+  syncSelection();
   try {
     const res = await api('/api/commit-mastery', {
       method: 'POST',
@@ -629,6 +639,7 @@ async function markSelection(checked) {
   } catch (e) {
     toast(`批量标记失败：${e.message}`, 'bad');
   } finally {
+    batchBusy = false;
     syncSelection();
   }
 }

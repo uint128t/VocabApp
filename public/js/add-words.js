@@ -238,13 +238,21 @@ async function commitAllCards() {
   btn.disabled = true;
   let written = 0;
   const skipped = [];
-  for (const card of targets) {
-    const a = card.api;
-    const res = await commitCard(card, true);
-    if (res === true) written += 1;
-    else skipped.push(`${a.word}（${typeof res === 'string' ? res : '未写入'}）`);
+  try {
+    for (const card of targets) {
+      const a = card.api;
+      // 单张卡出什么意外都不许打断整轮，也别把按钮锁死到刷新页面。
+      try {
+        const res = await commitCard(card, true);
+        if (res === true) written += 1;
+        else skipped.push(`${a.word}（${typeof res === 'string' ? res : '未写入'}）`);
+      } catch (e) {
+        skipped.push(`${a.word}（${e.message}）`);
+      }
+    }
+  } finally {
+    btn.disabled = false;
   }
-  btn.disabled = false;
   if (written) await loadEntries();
   toast(`已写入 ${written} 条${skipped.length ? ` · 未写入 ${skipped.length} 条：${skipped.join('、')}` : ''}`, skipped.length ? 'bad' : 'ok');
 }

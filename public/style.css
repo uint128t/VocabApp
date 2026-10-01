@@ -284,8 +284,23 @@ code {
   display: none;
 }
 
+/* 切面板时轻轻浮进来一下（toast 同款动画的低调版），让面板「换了」这件事看得见。 */
 .panel.active {
   display: block;
+  animation: rise-in 0.16s ease;
+}
+
+/* 动画只做点缀：系统关了动效就全部直出。 */
+@media (prefers-reduced-motion: reduce) {
+  .panel.active,
+  .toast {
+    animation: none;
+  }
+
+  .ov-bar i,
+  button {
+    transition: none;
+  }
 }
 
 .block {
@@ -320,6 +335,12 @@ select {
 }
 
 input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+input[type="checkbox"],
 input[type="radio"] {
   width: auto;
   padding: 0;
@@ -327,7 +348,6 @@ input[type="radio"] {
   border: none;
   border-radius: 0;
   background: none;
-  accent-color: var(--accent);
 }
 
 textarea {
@@ -678,6 +698,14 @@ button:disabled {
 
 .entry:hover {
   background: var(--surface-2);
+}
+
+/* 筛选落空时列表里只剩这句话，别剩一个白框。 */
+.list-empty {
+  padding: 26px 14px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 12.5px;
 }
 
 .head {
@@ -1271,6 +1299,18 @@ button:disabled {
 }
 
 /* ---- 提示条 ---- */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .toast {
   position: fixed;
   right: 20px;
@@ -1283,6 +1323,7 @@ button:disabled {
   border: 1px solid var(--line-strong);
   color: var(--fg);
   box-shadow: var(--shadow-2);
+  animation: rise-in 0.18s ease;
 }
 
 .toast.bad {

@@ -160,7 +160,8 @@ export function mountRound({ prefix, mode }) {
   }
 
   // 看词段：整词的义项与例句摊开，一次一个词。
-  function renderStudy(study) {    const head = document.createElement('div');
+  function renderStudy(study) {
+    const head = document.createElement('div');
     head.className = 'quiz-head';
     const title = document.createElement('strong');
     title.textContent = study.word;

@@ -127,7 +127,9 @@ function renderModelChips() {
     remove.textContent = '移除';
     remove.addEventListener('click', () => {
       settings.extraModels = settings.extraModels.filter((x) => x.name !== m.name);
-      availableModels = [...new Set(settings.extraModels.map((x) => x.name))];
+      // 默认模型不在候选里也始终保留：服务端的 models 就是 [默认, ...候选] 去重，
+      // 这里少算它的话，顶栏那个模型下拉会悄悄把默认模型挤掉。
+      availableModels = [...new Set([settings.model, ...settings.extraModels.map((x) => x.name)].filter(Boolean))];
       renderModelChips();
       syncSettingDefaults();
       setSaveState('有未保存的改动');

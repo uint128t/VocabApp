@@ -150,6 +150,8 @@ function activateTab(panel) {
   for (const t of document.querySelectorAll('.nav-item')) t.classList.toggle('active', t.dataset.panel === panel);
   for (const p of document.querySelectorAll('.panel')) p.classList.toggle('active', p.id === `panel-${panel}`);
   $('#panelTitle').textContent = PANEL_TITLE[panel] || 'Vocabulary 助手';
+  // 切面板是换地方干活，不是接着刚才的滚动位置往下看；留在原处只会落在新面板的半腰上。
+  window.scrollTo(0, 0);
 }
 
 for (const tab of document.querySelectorAll('.nav-item')) {
