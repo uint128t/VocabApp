@@ -40,23 +40,28 @@ function statTile(label, value, total, kind = '') {
   return box;
 }
 
-// 一根进度条：`kind` 决定颜色（完全掌握 / 部分掌握 / 不掌握 / 已掌握的义项）。
-function statBar(label, got, total, kind = 'full') {
-  const pct = total ? Math.round((got / total) * 100) : 0;
+// 侧栏底部那两行共用这一套：一行字 + 一根条。条上按比例画色段，剩下的留白就是还没掌握的那截
+// （所以「不掌握」不单独着色，跟义项那行的口径一样）。
+function ovRow(text) {
   const row = document.createElement('div');
   row.className = 'ov-row';
-  const name = document.createElement('span');
-  name.textContent = label;
-  const num = document.createElement('b');
-  num.textContent = `${got} / ${total}`;
-  row.append(name, num);
+  const span = document.createElement('span');
+  span.textContent = text;
+  row.append(span);
+  return row;
+}
+
+function ovBar(segments, total) {
   const track = document.createElement('div');
   track.className = 'ov-bar';
-  const fill = document.createElement('i');
-  fill.className = kind;
-  fill.style.width = `${pct}%`;
-  track.append(fill);
-  return [row, track];
+  for (const [kind, n] of segments) {
+    if (!n) continue;
+    const seg = document.createElement('i');
+    if (kind) seg.className = kind;
+    seg.style.width = `${total ? (n / total) * 100 : 0}%`;
+    track.append(seg);
+  }
+  return track;
 }
 
 function renderStats() {
@@ -76,10 +81,10 @@ function renderStats() {
   head.textContent = `共 ${s.total} 词 · ${n.total} 条义项`;
   $('#overview').replaceChildren(
     head,
-    ...statBar('完全掌握', s.full, s.total, 'full'),
-    ...statBar('部分掌握', s.partial, s.total, 'partial'),
-    ...statBar('不掌握', s.none, s.total, 'none'),
-    ...statBar('已掌握义项', n.checked, n.total, 'full'),
+    ovRow(`完全 ${s.full} · 部分 ${s.partial} · 不掌握 ${s.none}`),
+    ovBar([['full', s.full], ['partial', s.partial]], s.total),
+    ovRow(`已掌握义项 ${n.checked} / ${n.total}`),
+    ovBar([['', n.checked]], n.total),
   );
 }
 

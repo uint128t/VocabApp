@@ -215,13 +215,14 @@ code {
   color: var(--fg-2);
 }
 
-.ov-row b {
+.ov-row span {
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
 }
 
+/* 侧栏底部两根条长得一样：同高、同底色、同圆角；色段按比例铺在里面，剩下的留白就是还没掌握。 */
 .ov-bar {
-  height: 4px;
+  display: flex;
+  height: 6px;
   border-radius: 999px;
   background: var(--surface-3);
   overflow: hidden;
@@ -230,18 +231,12 @@ code {
 .ov-bar i {
   display: block;
   height: 100%;
-  border-radius: 999px;
   background: var(--accent);
   transition: width 0.2s ease;
 }
 
-/* 三档各一根条：完全掌握用主色，部分掌握用暖色，不掌握用灰——剩下的就是还没碰的。 */
 .ov-bar i.partial {
   background: var(--warn);
-}
-
-.ov-bar i.none {
-  background: var(--fg-muted);
 }
 
 .main {
