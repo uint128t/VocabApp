@@ -1633,47 +1633,59 @@ test('isLoopbackRequest 只认本机地址（迁移导出与文件对话框的�
   assert.equal(isLoopbackRequest(undefined), false, '没有 req 也当作不是本机');
 });
 
-test('共享存储接口只在 VOCAB_MOBILE=1 的部署可用', async () => {
-  const { base } = await start();
-  const status = await fetch(`${base}/api/vocab/external-status?dir=${encodeURIComponent('/tmp/x')}`);
-  assert.equal(status.status, 501);
-  assert.equal((await post(base, '/api/vocab/use-external', { dir: '/tmp/x' })).status, 501);
+
+
+test('use-file：把词表切到任意已有文件并原地读写；空文件写入；坏文件拒收', async () => {
+  const { base, settings } = await start(SORT_FIXTURE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-usefile-'));
+  const target = path.join(dir, 'My Vocab.md');
+
+  // 1) 空文件：把当前词表写过去并用它（「先建个空 md 再选进来」是常见用法）
+  fs.writeFileSync(target, '');
+  const empty = await post(base, '/api/vocab/use-file', { path: target });
+  assert.equal(empty.status, 200);
+  assert.equal(empty.body.copied, true);
+  assert.equal(fs.readFileSync(target, 'utf8'), SORT_FIXTURE);
+  assert.equal(settings.get().settings.vocabFile, target);
+
+  // 2) 已有词表文件：原地用，不改内容
+  const other = path.join(dir, 'other.md');
+  const otherText = '### Z\n\n- zebra\n  - [ ] #A1 - an animal - Zebras have stripes.\n';
+  fs.writeFileSync(other, otherText);
+  const again = await post(base, '/api/vocab/use-file', { path: other });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.copied, false);
+  assert.equal(fs.readFileSync(other, 'utf8'), otherText);
+  assert.equal(settings.get().settings.vocabFile, other);
+  assert.equal(again.body.stats.total, 1);
+
+  // 3) 写通过之后，正常写盘路径直接落在那个文件上（原地读写）
+  const res = await post(base, '/api/set-checked', { word: 'zebra', sense: 0, checked: true });
+  assert.equal(res.status, 200);
+  assert.match(fs.readFileSync(other, 'utf8'), /- \[x\] #A1 - an animal/);
+
+  // 4) 不是词表的文件（能解析但内容不符）与解析不过的文件：拒收且不切换
+  const before = settings.get().settings.vocabFile;
+  const broken = path.join(dir, 'broken.md');
+  fs.writeFileSync(broken, '### A\n\n  - [x] #B1 - orphan - Orphan child line.\n');
+  const bad = await post(base, '/api/vocab/use-file', { path: broken });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.error.code, 'parseErrors');
+  assert.equal(settings.get().settings.vocabFile, before);
+
+  // 5) 不存在的路径与目录：400，不动设置
+  assert.equal((await post(base, '/api/vocab/use-file', { path: path.join(dir, 'nope.md') })).status, 400);
+  assert.equal((await post(base, '/api/vocab/use-file', { path: dir })).status, 400);
+  assert.equal((await post(base, '/api/vocab/use-file', {})).status, 400);
+  assert.equal(settings.get().settings.vocabFile, before);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('共享存储：探写判定权限、复制词表并切路径、已有可解析的词表不覆盖', async () => {
-  process.env.VOCAB_MOBILE = '1';
-  try {
-    const { base, file, settings } = await start(SORT_FIXTURE);
-    const extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-ext-'));
-    const status = await (await fetch(`${base}/api/vocab/external-status?dir=${encodeURIComponent(extDir)}`)).json();
-    assert.equal(status.available, true, '可写目录应探写通过');
-
-    const res = await post(base, '/api/vocab/use-external', { dir: extDir });
-    assert.equal(res.status, 200);
-    assert.equal(res.body.copied, true, '目标还没有词表：把当前这份复制过去');
-    const target = path.join(extDir, 'Vocabulary.md');
-    assert.equal(fs.readFileSync(target, 'utf8'), SORT_FIXTURE);
-    assert.equal(settings.get().settings.vocabFile, target, '切换后设置里的路径指向外部文件');
-    assert.ok(res.body.stats.total > 0);
-
-    // 外部已经有一份能解析的词表（比如 Syncthing 刚同步来的）：不覆盖，直接切过去用
-    const extern = '### Z\n\n- zebra\n  - [ ] #A1 - an animal - Zebras have stripes.\n';
-    fs.writeFileSync(target, extern);
-    // 先切回原来的词表，才能再走一次 use-external
-    settings.patch({ vocabFile: file });
-    const res2 = await post(base, '/api/vocab/use-external', { dir: extDir });
-    assert.equal(res2.status, 200);
-    assert.equal(res2.body.copied, false, '已有可解析的词表不该被覆盖');
-    assert.equal(fs.readFileSync(target, 'utf8'), extern);
-
-    // 不可写目录：externalDenied，且不切换
-    const before = settings.get().settings.vocabFile;
-    const bad = await post(base, '/api/vocab/use-external', { dir: path.join(extDir, 'Vocabulary.md', 'nested') });
-    assert.equal(bad.status, 400);
-    assert.equal(bad.body.error.code, 'externalDenied');
-    assert.equal(settings.get().settings.vocabFile, before);
-    fs.rmSync(extDir, { recursive: true, force: true });
-  } finally {
-    delete process.env.VOCAB_MOBILE;
-  }
+test('use-file：切到同一个文件是幂等的', async () => {
+  const { base, file, settings } = await start(SORT_FIXTURE);
+  const res = await post(base, '/api/vocab/use-file', { path: file });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.copied, false);
+  assert.equal(settings.get().settings.vocabFile, file);
+  assert.equal(res.body.stats.total, 2);
 });

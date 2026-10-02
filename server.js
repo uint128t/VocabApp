@@ -328,24 +328,6 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
 
     '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
 
-    // 共享存储（D48）：把词表切进手机的外部目录（getExternalStorageDirectory/Documents/
-    // VocabApp），Syncthing 这类工具就能直接同步它。只在移动版可用（VOCAB_MOBILE=1）；
-    // 权限是安卓的「所有文件访问」，由前端在桥页申请，这里靠探写来判定给没给。
-    '/api/vocab/external-status': (req, url) => {
-      if (process.env.VOCAB_MOBILE !== '1') throw httpError(501, 'notSupported', '共享存储只在移动版可用');
-      const dir = url.searchParams.get('dir') || '';
-      if (!dir) throw httpError(400, 'badDirDir', 'dir 不能为空');
-      const probe = path.join(dir, '.vocabapp-write-test');
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(probe, 'ok', 'utf8');
-        fs.unlinkSync(probe);
-        return { status: 200, body: { available: true, dir } };
-      } catch {
-        return { status: 200, body: { available: false, dir } };
-      }
-    },
-
     // 设备迁移（D46）：导出「密钥 + 设置」打成一份 .vocabpack（前端再拼上词表）。
     // 密钥值只在服务端出现过、只在回环请求里下发：LAN 上的其他设备取不走。
     '/api/migrate/export': (req) => {
@@ -891,38 +873,53 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       return { status: 200, body: { path: picked } };
     },
 
-    // 「把词表复制过去并切过去」：整份读当前词表 → 校验 → 写外部目标（已有且一样的就不覆盖）
-    // → 改设置里的 vocabFile。失败不切，原词表一个字节不动。
-    '/api/vocab/use-external': async (req) => {
-      if (process.env.VOCAB_MOBILE !== '1') throw httpError(501, 'notSupported', '共享存储只在移动版可用');
+    // 直接读写外部文件（D48）：把词表切到**任意一个已有的 .md**——手机上「选取词表文件…」
+    // 选中哪个就用哪个（原地读、原地写），放进 Syncthing 同步的文件夹即可自动同步。
+    // 空文件按「把当前词表写过去，以后就用这个文件」处理；内容解析不过的原样拒收；
+    // 读不了/写不进的（没权限、云盘位置）报 externalDenied，前端据此提示去开「所有文件访问」。
+    '/api/vocab/use-file': async (req) => {
       const body = await readJson(req);
-      const dir = typeof body?.dir === 'string' ? body.dir.trim() : '';
-      if (!dir) throw httpError(400, 'badDir', 'dir 不能为空');
-      const target = path.join(dir, 'Vocabulary.md');
-      if (target === currentSettings().vocabFile) {
-        return { status: 200, body: { stats: parse(store.readFile()).stats, copied: false, vocabFile: target } };
-      }
-      const text = store.readFile();
-      const { stats, errors } = parse(text);
-      if (errors.length) throw httpError(400, 'parseErrors', '当前词表解析失败，未切换', errors.slice(0, 20));
+      const raw = typeof body?.path === 'string' ? body.path.trim() : '';
+      if (!raw) throw httpError(400, 'badPath', 'path 不能为空');
+      const target = path.resolve(raw);
+      let stat;
       try {
-        fs.mkdirSync(dir, { recursive: true });
-        const probe = path.join(dir, '.vocabapp-write-test');
+        stat = fs.statSync(target);
+      } catch {
+        throw httpError(400, 'badPath', `找不到这个文件：${target}`);
+      }
+      if (!stat.isFile()) throw httpError(400, 'badPath', `这不是一个文件：${target}`);
+      if (target === currentSettings().vocabFile) {
+        return { status: 200, body: { stats: parse(store.readFile()).stats, vocabFile: target, copied: false } };
+      }
+      let text;
+      try {
+        text = fs.readFileSync(target, 'utf8');
+      } catch (e) {
+        throw httpError(400, 'externalDenied', `读不了这个文件（${e.code || e.message}）：若它在共享存储里，先在系统设置里允许「所有文件访问」`);
+      }
+      // 写权限用「同目录建个临时文件再删」来探：store 写盘也是同目录临时文件 + 改名
+      try {
+        const probe = path.join(path.dirname(target), `.vocabapp-write-test-${process.pid}`);
         fs.writeFileSync(probe, 'ok', 'utf8');
         fs.unlinkSync(probe);
       } catch (e) {
-        throw httpError(400, 'externalDenied', `写不进共享存储（${e.code || e.message}）：先在系统设置里允许「所有文件访问」`);
+        throw httpError(400, 'externalDenied', `这个位置写不进去（${e.code || e.message}）：先在系统设置里允许「所有文件访问」`);
       }
-      const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-      // 那边已经有一份（比如 Syncthing 同步过来的）：只要词表能解析就不动它，避免刚同步的版本被覆盖
       let copied = false;
-      if (existing === null || parse(existing).errors.length) {
+      if (!text.trim()) {
+        // 空文件（在新位置先建了个空 md 再选进来是常见用法）：把当前词表写过去
+        text = store.readFile();
         fs.writeFileSync(target, text, 'utf8');
         copied = true;
       }
+      const { stats, errors } = parse(text);
+      if (errors.length) {
+        throw httpError(400, 'parseErrors', '这份文件不是能解析的词表（是不是选错了文件？）', errors.slice(0, 20));
+      }
       const patched = settingsStore.patch({ vocabFile: target });
       if (patched.error) throw httpError(400, patched.error.code, patched.error.message);
-      return { status: 200, body: { stats: parse(copied ? text : existing).stats, copied, vocabFile: target } };
+      return { status: 200, body: { stats, vocabFile: target, copied } };
     },
 
     // 整表导入：整份 Markdown 替换当前词表。先解析后写盘——解析不过的文件一个字节都不落，

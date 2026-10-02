@@ -60,7 +60,7 @@ function setSaveState(message, bad) {
 }
 
 const VOCAB_NOTE = '指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。';
-const VOCAB_NOTE_MOBILE = '手机上词表常驻应用沙盒，这条路径一般不用手改；要从外面换一份词表，用下面的「选取词表并导入…」。';
+const VOCAB_NOTE_MOBILE = '手机上词表默认住应用沙盒；用上面的「选取词表文件…」可以直接切到外部文件（放进 Syncthing 同步的文件夹就能自动同步）。';
 
 function showVocabNote(problem) {
   const el = $('#vocabFileNote');
@@ -176,15 +176,11 @@ async function loadSettings() {
     showVocabNote(body.vocabFileError);
     $('#openEnv').hidden = $('#openSettings').hidden = platform !== 'win32';
     $('#keysRow').hidden = $('#keysEditRow').hidden = $('#keysHint').hidden = !keysFile;
-    // 词表路径旁的「浏览…/选取并导入…」按平台与是否本机挂一次（重复 loadSettings 不重复挂）
+    // 词表路径旁的「浏览…（桌面）/选取词表文件…（手机）」按平台挂一次（重复 loadSettings 不重复挂）
     if (!pickerMounted) {
       pickerMounted = true;
       mountVocabPicker({ platform, isLocal: Boolean(body.local), isMobile: Boolean(keysFile) });
     }
-    // 安卓 App：共享存储那一行（D48）。桥页跳回来时顺带自动完成切换
-    const isAndroidApp = platform === 'android' && Boolean(keysFile);
-    $('#externalRow').hidden = $('#externalHint').hidden = !isAndroidApp;
-    mountExternalStorage(isAndroidApp);
     // 移动版没有 .env，那段「密钥写在 .env 里」的说明换成沙盒口径，别让手机用户去找不存在的文件
     if (keysFile) {
       $('#modelHint').textContent =
@@ -343,137 +339,83 @@ async function doImport(file, stateEl = $('#vocabTransfer')) {
   }
 }
 
-// 词表路径旁的「选取」（D47）。两端各一套：
-//  · Windows 桌面（且就在本机开页面）：调 /api/pick-file 弹**原生文件框**，选中即填路径并保存；
-//  · 移动版（keysFile 存在）：系统文件对话框选一份 md，读出来直接导入当前词表（手机上的路径固定在沙盒）。
+// 词表路径旁的「选取」（D47/D48）。两端各一套、都落到同一个动作——**直接在选中的文件上读写**：
+//  · Windows 桌面（且就在本机开页面）：调 /api/pick-file 弹原生文件框，选中即切过去；
+//  · 安卓 App：跳去 Capacitor 桥页（那里才有原生插件）先要「所有文件访问」权限再弹系统文件
+//    选择器，带着真实路径回来接着切（?picked=…）。
 //  · 其他情况（如从手机浏览器访问电脑）：两个按钮都不显示，路径手填。
 function mountVocabPicker({ platform, isLocal, isMobile }) {
-  const browse = $('#pickVocab');
-  const pick = $('#pickImportVocab');
   const hint = $('#pickHint');
 
+  const say = (text, bad = false) => {
+    hint.hidden = false;
+    hint.textContent = text;
+    hint.className = bad ? 'save-state bad' : 'save-state';
+  };
+
+  // 把「某个已有文件」切成当前词表（服务端负责校验、探写、空文件写入与切换）
+  async function applyPickedPath(picked) {
+    if (!picked) return;
+    say('检查这个文件…');
+    try {
+      const res = await api('/api/vocab/use-file', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: picked }),
+      });
+      say(`已切到 ${res.vocabFile}（${res.stats.total} 词${res.copied ? '，已把当前词表写了过去' : ''}）——之后都在这个文件上读写`);
+      toast(`词表现在是 ${res.vocabFile} 里那一份（${res.stats.total} 词）`);
+      await loadSettings();
+      if (vocabFileReload) await vocabFileReload();
+    } catch (e) {
+      // 没权限/读不了：手机上去桥页要权限再重选；桌面把原因摆出来
+      if (e.code === 'externalDenied' && isMobile) {
+        openBridgePicker();
+        return;
+      }
+      say(`没切成：${e.message}`, true);
+    }
+  }
+
+  function openBridgePicker() {
+    const back = `${location.origin}/?ptab=settings`;
+    location.href = `https://localhost/storage.html?mode=pick&back=${encodeURIComponent(back)}`;
+  }
+
   if (platform === 'win32' && isLocal) {
+    const browse = $('#pickVocab');
     browse.hidden = false;
     browse.addEventListener('click', async () => {
-      hint.hidden = false;
-      hint.textContent = '等你在弹出的文件框里选…';
-      hint.className = 'save-state';
+      say('等你在弹出的文件框里选…');
       browse.disabled = true;
       try {
         const res = await api('/api/pick-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
         if (!res.path) {
-          hint.textContent = '已取消选择';
+          say('已取消选择');
           return;
         }
-        $('#vocabFile').value = res.path;
-        // 选中即保存并生效：路径改了 store 立刻换目标，省掉「还要记得点保存设置」这一步
-        const saved = await saveSettings({ vocabFile: res.path });
-        hint.textContent = saved ? `已选：${res.path}` : '已填入路径，但保存失败';
-        hint.className = saved ? 'save-state' : 'save-state bad';
+        await applyPickedPath(res.path);
       } catch (e) {
-        hint.textContent = `打开文件框失败：${e.message}`;
-        hint.className = 'save-state bad';
+        say(`打开文件框失败：${e.message}`, true);
       } finally {
         browse.disabled = false;
       }
     });
   } else if (isMobile) {
-    pick.hidden = false;
-    pick.addEventListener('click', () => $('#vocabPickFile').click());
-    $('#vocabPickFile').addEventListener('change', () => {
-      const file = $('#vocabPickFile').files[0];
-      hint.hidden = false;
-      if (file) doImport(file, hint);
-    });
+    $('#pickVocabMobile').hidden = false;
+    $('#pickVocabMobile').addEventListener('click', openBridgePicker);
   }
-}
 
-// 安卓共享存储（D48）：把词表切到外部目录，Syncthing 之类的工具就能直接同步它。
-// 权限要「所有文件访问」（MANAGE_EXTERNAL_STORAGE），申请入口在 Capacitor 的桥页里
-// （https://localhost/storage.html）——跳到 Node 页面的 WebView 里没有插件桥，只有桥页能调原生。
-const EXTERNAL_DIR = '/storage/emulated/0/Documents/VocabApp';
-let externalMounted = false;
-let externalAutoDone = false;
-
-async function refreshExternalState() {
-  const el = $('#externalState');
-  const cur = settings?.vocabFile || '';
-  if (cur.startsWith('/storage/emulated/0/')) {
-    el.textContent = '当前词表就在共享存储里，可由 Syncthing 等同步';
-    el.className = 'save-state';
-    return;
-  }
-  try {
-    const res = await api(`/api/vocab/external-status?dir=${encodeURIComponent(EXTERNAL_DIR)}`);
-    el.textContent = res.available ? '尚未使用：点了会把词表复制过去并切到那边' : '还没有「所有文件访问」权限，点按钮去系统里开启';
-    el.className = res.available ? 'save-state' : 'save-state bad';
-  } catch {
-    el.textContent = '';
-  }
-}
-
-async function switchToExternal() {
-  const state = $('#externalState');
-  const btn = $('#useExternal');
-  state.textContent = '切换中…';
-  state.className = 'save-state';
-  btn.disabled = true;
-  try {
-    const res = await api('/api/vocab/use-external', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ dir: EXTERNAL_DIR }),
-    });
-    toast(`词表已切到共享存储（${res.stats.total} 词${res.copied ? '，已复制过去' : '，用的是那里已有的那份'}）`);
-    await loadSettings();
-    if (vocabFileReload) await vocabFileReload();
-  } catch (e) {
-    if (e.code === 'externalDenied') {
-      // 没权限：去桥页申请（那里能调原生插件），批下来会自动跳回来并继续
-      state.textContent = '正在打开系统设置去开启权限…';
-      state.className = 'save-state bad';
-      location.href = `https://localhost/storage.html?back=${encodeURIComponent(`${location.origin}/?storage=1`)}`;
-      return;
-    }
-    state.textContent = `切换失败：${e.message}`;
-    state.className = 'save-state bad';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function mountExternalStorage(isAndroidApp) {
-  if (!isAndroidApp) return;
-  if (!externalMounted) {
-    externalMounted = true;
-    const btn = $('#useExternal');
-    let armTimer;
-    btn.addEventListener('click', () => {
-      // 两步确认（同「删除」的 armed 模式）：换文件是大事，先亮一次确认
-      if (!btn.dataset.armed) {
-        btn.dataset.armed = '1';
-        btn.textContent = '确认：切换到共享存储';
-        armTimer = setTimeout(() => {
-          delete btn.dataset.armed;
-          btn.textContent = '使用共享存储文件夹';
-        }, 5000);
-        return;
-      }
-      clearTimeout(armTimer);
-      delete btn.dataset.armed;
-      btn.textContent = '使用共享存储文件夹';
-      switchToExternal();
-    });
-  }
-  // 从权限桥页跳回来（?storage=1）：自动接着切，不用再点一次
-  const wantAuto = new URLSearchParams(location.search).get('storage') === '1';
-  if (wantAuto && !externalAutoDone) {
-    externalAutoDone = true;
+  // 从桥页跳回来：带着选好的路径（或取消标记）——自动接着切
+  const params = new URLSearchParams(location.search);
+  if (params.get('ptab') === 'settings') activateTab('settings');
+  const picked = params.get('picked');
+  const cancelled = params.get('pick') === 'none';
+  if (picked || cancelled) {
     history.replaceState(null, '', location.pathname);
-    activateTab('settings');
-    setTimeout(switchToExternal, 400);
+    if (picked) setTimeout(() => applyPickedPath(picked), 300);
+    else say('已取消选择');
   }
-  refreshExternalState();
 }
 
 $('#openEnv').addEventListener('click', () => openConfigFile('env'));

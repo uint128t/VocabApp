@@ -145,19 +145,12 @@
                 <div class="row">
                   <input id="vocabFile" type="text" placeholder="Vocabulary.md 的完整路径，例如 C:\Users\你\Notes\Vocabulary.md" />
                   <button id="pickVocab" class="btn" type="button" hidden>浏览…</button>
-                </div>
-                <div class="row">
-                  <input id="vocabPickFile" type="file" accept=".md,.markdown,.txt" hidden />
-                  <button id="pickImportVocab" class="btn" type="button" hidden>选取词表并导入…</button>
+                  <button id="pickVocabMobile" class="btn" type="button" hidden>选取词表文件…</button>
                   <span id="pickHint" class="save-state" hidden></span>
                 </div>
-                <div class="row" id="externalRow" hidden>
-                  <button id="useExternal" class="btn" type="button">使用共享存储文件夹</button>
-                  <span id="externalState" class="save-state"></span>
-                </div>
-                <p class="hint" id="externalHint" hidden>
-                  切过去之后，词表存在手机的共享存储里（Documents/VocabApp/Vocabulary.md），
-                  Syncthing 之类的工具可以直接同步这个文件夹到电脑——不用再手动导入导出。
+                <p class="hint" id="pickVocabHint" hidden>
+                  选中的文件会被<strong>直接读写</strong>（原地用，不拷进应用）——放进 Syncthing 同步的文件夹，电脑与手机就会自动同步同一份词表。
+                  空文件会把当前词表写过去；这个位置读不了/写不了会提示去开「所有文件访问」；云盘位置拿不到真实路径，请改用下面的「从文件导入并替换…」。
                 </p>
                 <p class="hint" id="vocabFileNote">
                   指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。
