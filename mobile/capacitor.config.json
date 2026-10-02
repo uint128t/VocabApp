@@ -2,6 +2,9 @@
   "appId": "com.uint128t.vocabapp",
   "appName": "Vocabulary 助手",
   "webDir": "www",
+  "server": {
+    "allowNavigation": ["127.0.0.1"]
+  },
   "plugins": {
     "CapacitorNodeJS": {
       "nodeDir": "nodejs",

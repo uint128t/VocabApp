@@ -164,7 +164,14 @@ async function loadSettings() {
     keyNames = body.keyNames || [];
     $('#openEnv').hidden = $('#openSettings').hidden = platform !== 'win32';
     $('#keysRow').hidden = $('#keysEditRow').hidden = $('#keysHint').hidden = !keysFile;
+    // 移动版没有 .env，那段「密钥写在 .env 里」的说明换成沙盒口径，别让手机用户去找不存在的文件
+    if (keysFile) {
+      $('#modelHint').textContent =
+        '模型全部平级地保存在应用沙盒的 settings.json（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数。密钥值用上面的「密钥管理」保存，只选名字、不回显。';
+    }
     renderKeyNames();
+    // 没密钥的提示按存储方式说人话：桌面密钥在 .env，移动版在应用沙盒里
+    $('#keyFlag').textContent = body.hasKey ? '' : body.keysFile ? '还没有任何密钥' : '.env 里没有密钥';
     fillSelect($('#newModelKey'), keyNames, keyNames[0]);
     $('#promptEntry').value = settings.prompts.entry || '';
     $('#promptJudge').value = settings.prompts.judge || '';
