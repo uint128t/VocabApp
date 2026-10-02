@@ -8,7 +8,19 @@ const mobileDir = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(mobileDir, '..');
 const target = path.join(mobileDir, 'www', 'nodejs');
 
-const COPY_FILES = ['server.js', 'vocab.js', 'store.js', 'session.js', 'ai.js', 'cefr.js', 'config.js', 'settings.js', 'dirname.js'];
+const COPY_FILES = [
+  'server.js',
+  'vocab.js',
+  'store.js',
+  'state-file.js',
+  'desktop-host.js',
+  'session.js',
+  'ai.js',
+  'cefr.js',
+  'config.js',
+  'settings.js',
+  'dirname.js',
+];
 
 fs.rmSync(target, { recursive: true, force: true });
 fs.mkdirSync(path.join(target, 'data'), { recursive: true });

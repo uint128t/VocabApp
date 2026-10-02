@@ -21,12 +21,13 @@ process.env.VOCAB_MOBILE = '1';
 fs.mkdirSync(process.env.VOCAB_BACKUP_DIR, { recursive: true });
 fs.mkdirSync(process.env.VOCAB_STATE_DIR, { recursive: true });
 
-import('./server.js')
-  .then(async () => {
-    let port = 5317;
+import('./settings.js')
+  .then(async ({ resolvePort, DEFAULTS }) => {
+    let port = DEFAULTS.port;
     try {
-      port = JSON.parse(fs.readFileSync(process.env.VOCAB_SETTINGS_FILE, 'utf8')).port || 5317;
+      port = resolvePort(JSON.parse(fs.readFileSync(process.env.VOCAB_SETTINGS_FILE, 'utf8')).port);
     } catch {}
+    await import('./server.js');
     const base = `http://127.0.0.1:${port}`;
     // 等服务真的应答了再广播端口，别让加载页跳到一个还没 listen 的地址上
     for (let i = 0; i < 120; i++) {

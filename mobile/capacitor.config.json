@@ -1,6 +1,6 @@
 {
   "appId": "com.uint128t.vocabapp",
-  "appName": "Vocabulary 助手",
+  "appName": "VocabApp",
   "webDir": "www",
   "server": {
     "allowNavigation": ["127.0.0.1"]
