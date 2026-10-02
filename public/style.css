@@ -562,13 +562,13 @@ button:disabled {
    用一圈透明的伪元素把可点范围悄悄扩出来（竖向为主），外观与排版完全不变。 */
 .edit-btn,
 .delete-btn,
-.skip-btn {
+.link-btn {
   position: relative;
 }
 
 .edit-btn::after,
 .delete-btn::after,
-.skip-btn::after {
+.link-btn::after {
   content: '';
   position: absolute;
   inset: -6px -1px;
@@ -607,7 +607,7 @@ button:disabled {
   }
 }
 
-.skip-btn {
+.link-btn {
   background: transparent;
   border-color: transparent;
   color: var(--fg-muted);
@@ -1193,6 +1193,11 @@ button:disabled {
 .refactor-pick {
   margin-right: 6px;
   flex: none;
+}
+
+/* 重构与复判行里那截「#B1 → #C1」：比词头轻一档，比状态行重一档 */
+.move {
+  color: var(--fg-2);
 }
 
 /* 档位复判清单复用重构面板的 li/preview 版式，这里只剩标题那行要压一下字号 */

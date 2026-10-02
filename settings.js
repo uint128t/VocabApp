@@ -14,7 +14,7 @@ const LANGS = new Set(['zh', 'en']);
 const PROMPT_KEYS = ['entry', 'judge'];
 const PROMPT_MAX = 4000;
 // 监听端口的合法区间：设置页的数字框、启动块的读回、移动版的兜底都按这一处判。
-export const PORT_RANGE = [1024, 65535];
+const PORT_RANGE = [1024, 65535];
 
 // 把任意来源的端口值收成能用的整数：不是合法端口就回默认值（设置页交来的数字串也走这里）。
 export function resolvePort(value, fallback = DEFAULTS.port) {

@@ -6,7 +6,7 @@ const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 // 词形归并与词根推测也只在它们身上试。
 const TIER = ['cefrj', 'octanove'];
 
-export const SOURCES = {
+const SOURCES = {
   cefrj: 'CEFR-J',
   octanove: 'Octanove C1/C2',
   freq: '按常用度推算',
@@ -210,7 +210,7 @@ export function lookup(index, raw) {
 
 // 定档用的逐步记录：哪一步查到了什么、哪一步空手而归。给界面上的「定档依据」方块看，
 // 与 lookup/describe 走同一套数据，只是把过程留下来。
-export function traceLookup(index, raw) {
+function traceLookup(index, raw) {
   const { base } = parseQuery(raw);
   if (!base) return null;
   const tiers = TIER.map((name) => {

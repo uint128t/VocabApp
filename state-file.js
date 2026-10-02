@@ -32,5 +32,5 @@ export function createStateFile({ file, fs = realFs }) {
     }
   };
 
-  return { file, read, write };
+  return { read, write };
 }

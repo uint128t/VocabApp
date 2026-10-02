@@ -664,7 +664,7 @@ function refactorSlot(entry) {
   const word = document.createElement('strong');
   word.textContent = entry.word;
   const move = document.createElement('span');
-  move.className = 'def';
+  move.className = 'move';
   const before = (entry.senses || []).map((s) => s.level || '—').join(' / ') || '—';
   move.textContent = `${before} → …`;
   const out = document.createElement('span');
@@ -878,7 +878,7 @@ function levelRow(item, sense, index) {
   const word = document.createElement('strong');
   word.textContent = `${item.word} · 义项 ${index + 1}`;
   const move = document.createElement('span');
-  move.className = 'def';
+  move.className = 'move';
   move.textContent = sense.level ? `#${sense.level}` : '#—';
   const out = document.createElement('span');
   out.className = 'save-state';
@@ -1370,7 +1370,7 @@ $('#reload').addEventListener('click', loadEntries);
 
 // 加词卡片上的「定位到词表」走这里：筛选框与列表是本面板的 DOM，别的面板不直接动它们。
 function locateWord(word) {
-  activateTab('fill');
+  activateTab('vocab');
   $('#chapter').value = '';
   $('#difficulty').value = '';
   $('#mastery').value = '';
@@ -1379,4 +1379,4 @@ function locateWord(word) {
   document.querySelector('#list li')?.scrollIntoView({ block: 'center' });
 }
 
-export { renderList, loadEntries, locateWord };
+export { loadEntries, locateWord };

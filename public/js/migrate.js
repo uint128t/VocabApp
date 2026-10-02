@@ -418,7 +418,7 @@ function assembleVocab() {
   if (allRemote) return v.remoteText;
   const out = [];
   for (const [name, rtext] of rs) {
-    const pick = state.choices.get(`vocab:${name === '' ? '' : name}`);
+    const pick = state.choices.get(`vocab:${name}`);
     const useLocal = pick === 'local';
     const text = useLocal ? ls.get(name) ?? rtext : rtext;
     if (name === '' && !text.trim()) continue;

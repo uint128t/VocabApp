@@ -198,7 +198,7 @@ const EXAM_RETRY_NUDGE =
   'Your previous reply would have given the meaning away, so it was thrown away. Answer again with a suggestion that says nothing about what the word means, or with an empty suggestion.';
 const EXAM_TRIES = 3;
 
-export function judgeInstructions(lang) {
+function judgeInstructions(lang) {
   const feedback =
     lang === 'en'
       ? 'Write the reason and suggestion in English.'
@@ -502,7 +502,7 @@ export function createAi({
     for (const row of rows) {
       const definition = cleanField(row?.definition);
       const example = cleanField(row?.example);
-      // 档位不在这里定：模型被明确要求不输出档位，档位随后由五次投票决定。
+      // 档位不在这里定：模型被明确要求不输出档位，档位随后由三票定。
       // 「 - 」是行格式的分隔符，释义与例句里出现都会把那一行拆错，两条都挡住。
       if (!definition || !example || definition.includes(' - ') || example.includes(' - ')) continue;
       const chinese = wantChinese ? (typeof row.chinese === 'string' ? row.chinese.trim() : '') : '';

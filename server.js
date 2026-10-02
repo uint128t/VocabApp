@@ -1281,6 +1281,6 @@ if (process.env.VOCAB_MOBILE === '1' || (process.argv[1] && pathToFileURL(proces
     }
     console.log(`数据源：${current.settings.vocabFile || '（还没设置，请在设置页填词表路径）'}`);
     console.log(`生效模型：${current.settings.model || '（未设置，请在设置页选择）'}${current.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
-    if (!Object.keys(config.readKeys()).length) console.log('提示：还没有任何密钥，加词与自测暂不可用');
+    if (!Object.keys(config.readKeys()).length) console.log('提示：还没有任何密钥，加词与判定暂不可用');
   });
 }

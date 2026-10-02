@@ -317,7 +317,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
     };
   }
 
-  // 「不会」= 原来那个 SKIP：这条义项直接算不会，不花模型调用。
+  // 「不会」走 skip：这条义项直接算不会，不花模型调用。
   async function skip(word, sense) {
     const state = running();
     if (state.phase !== 'test') throw err('examOutOfOrder', '先把这一轮要看的词看完，再开始测试');

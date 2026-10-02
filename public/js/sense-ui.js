@@ -55,7 +55,7 @@ function senseRow(entry, sense, { withCheck = false } = {}) {
 
   const gen = document.createElement('button');
   gen.type = 'button';
-  gen.className = 'skip-btn';
+  gen.className = 'link-btn';
   gen.textContent = '生成例句';
   const out = document.createElement('span');
   out.className = 'gen-example';

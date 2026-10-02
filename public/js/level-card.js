@@ -87,7 +87,7 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
 
   function update(next = {}) {
     const state = { level, vote, trace, error, note, ...next };
-    const votes5 = state.vote?.votes || [];
+    const votesAll = state.vote?.votes || [];
     const level_ = state.level || state.vote?.level || null;
 
     tag.textContent = level_ ? `#${level_}` : '#—';
@@ -97,7 +97,7 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
       state.vote
         // 一共问了几票看 votes 本身，别把票数写死在这儿（票数改过一次了）。
         ? `一致 ${state.vote.agree}/${state.vote.valid}${
-            votes5.length > state.vote.valid ? `（${votes5.length - state.vote.valid} 票空）` : ''
+            votesAll.length > state.vote.valid ? `（${votesAll.length - state.vote.valid} 票空）` : ''
           }`
         : null,
       state.error ? `定档失败：${state.error}` : null,
@@ -118,12 +118,12 @@ export function levelCard({ level = null, vote = null, trace = null, error = nul
 
     votes.replaceChildren();
     const label = document.createElement('b');
-    label.textContent = votes5.length ? `AI ${votes5.length} 票` : 'AI 投票';
+    label.textContent = votesAll.length ? `AI ${votesAll.length} 票` : 'AI 投票';
     votes.append(label);
     const boxes = document.createElement('span');
     boxes.className = 'vote-boxes';
-    for (const v of votes5) boxes.append(voteBox(v));
-    if (!votes5.length) {
+    for (const v of votesAll) boxes.append(voteBox(v));
+    if (!votesAll.length) {
       const none = document.createElement('span');
       none.className = 'vote-none';
       none.textContent = '还没跑';

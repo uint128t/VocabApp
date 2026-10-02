@@ -1,4 +1,4 @@
-// Vocabulary 助手 · 移动版入口（D45）
+// VocabApp · 移动版入口（D45）
 //
 // Capacitor 的 nodejs-mobile 内核以 www/nodejs/package.json 的 main 字段找到本文件。
 // 职责只有三件：
