@@ -6,9 +6,9 @@
 
 词表真身在 Obsidian 库里，工具按**设置页里填的那个路径**去读写它（保存后立即生效，不用重启）。这个路径是唯一的来源——工具目录里没有软链，也没有「两处对齐」这回事（§4.8）。
 
-`node --test` 是全部测试，250 条。
+`node --test` 是全部测试，249 条。
 
-这份文档是唯一权威规格：数据格式、决策记录（D1–D52）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑，全在里面。接手时读完这一份就够了。它合并了早先的 `Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，那三份已经删除。
+这份文档是唯一权威规格：数据格式、决策记录（D1–D53）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑，全在里面。接手时读完这一份就够了。它合并了早先的 `Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，那三份已经删除。
 
 ---
 
@@ -171,6 +171,7 @@
 | D50 | 手机上的文件出口走系统分享（桥页）；防横滚改成「连着两帧都溢出才处置」 | 用户两条：「安卓端无法下载当前词表」「安卓端替换完词表文件工具条会缩小 第二次打开又恢复正常」。**① 导出为什么在手机上从来没通过**：主界面（`http://127.0.0.1:5317`）那个 WebView 里 `window.Capacitor` 压根不存在（实测），`<a download>` 点了不会有任何反应——而设备包导出那条路用「有没有 Filesystem/Share 插件」判断是不是原生，在这里永远判成桌面，所以那颗按钮在手机上同样是死的。改法：`core.deliverFile(name, url)` 一处决定去向——桌面交给浏览器下载，App 里跳 `storage.html?mode=share&name=…&src=…`，由桥页向内嵌服务取那一份内容（词表上百 KB，不从 URL 搬运）、写进应用缓存、弹系统分享。配套两件事：整份设备包改由**服务端一次拼好**（`vocabText` 进包，前端不再 fetch 两份再合并），LAN 上来导不再 `403`——包照样给，只是 `keys:{}` 加 `keysOmitted:true`；跨源那一跳开一条只认 Capacitor 自家 origin 的 CORS（见 §4.7）。分享面板被关掉时插件不一定回话（实测停在「正在打开分享」），所以「返回应用」在弹面板之前就亮出来。**② 工具条缩小**：判据是量出来的没错，但**单帧的量不算数**——替换完词表那一瞬布局还没落定，第一帧量到溢出先不动手，下一帧再量一次还在才压字号（`fitChrome` 里那道 `overflowSeen`）。顺带修掉 `naturalWidth` 的一处系统性高估：`display:none` 的子元素也被算了一道间隙（工具条 +6px、导航 +10px），字号本来就将将够的场景会被它误压。**实测**（模拟器 vocab35）：点「下载当前词表」→ 桥页地址与参数正确 → 应用缓存里出现 `Vocabulary-2026-10-02.md` → 系统分享面板起来（`clip={text/uri-list … U(content)}`）；点「导出设备包」→ 包里九个字段齐、`keys` 两把、`vocabText` 就是当前那份、`device: android`；取消分享后点「返回应用」回到 `http://127.0.0.1:5317/?ptab=settings`。防横滚回归（1.0×）：只脏一帧的宽按钮 → `--fit` 压根不出现；真的塞不下 → 压到 0.800（12.59 → 10.07px）；撤掉 → 自动复位。桌面同页两颗按钮都生成正确的 `<a download>`（文件名带日期）；重启后的服务导出带 `vocabText`（真表 590 词）与 `access-control-allow-origin: https://localhost`，而 `origin: https://evil.example` 一个头都不给。测试 249 → **250**。 |
 | D51 | 改名 VocabApp + 淡紫主题 + 底层与前端整理 + 界面文案过一遍 humanizer-zh | 用户四条：「根据设计哲学 整理/重构一下底层 前端 和目录结构 删除不需要的 可以解耦合的适度调整」「用 humanizer-zh 优化文案 精简繁杂文案 去掉否定性表述」「软件名字改为 VocabApp 并且优化图标」「软件主题色改为浅紫色 优化 ui 使其更有现代感」。**① 后端结构**：`createStateFile` 从 `store.js` 抽成 `state-file.js`——一个 JSON 小文件只要「临时文件 + 改名」，词表那一套还要备份、轮转、认链接，规矩不同；`notepad` 打开配置文件与 Windows 原生文件框抽成 `desktop-host.js`，「只有桌面才有的能力」集中在一处。两个新模块都只有 `server.js` 一个调用方，`mobile/build-nodejs.mjs` 的拷贝清单跟着补上（后端 11 块）。词头规则收进 `vocab.js` 的 `wordProblem()`，HTTP 入口与写盘校验读同一处；端口合法区间收进 `settings.js` 的 `PORT_RANGE` 与 `resolvePort()`，设置页校验、启动块读回、移动版兜底都调它。`config.js` 交钥匙的方式统一成 `readKeys()` 现读（`keys` / `keyNames` 两处快照撤掉），`/api/settings` 的响应只剩前端真读的十一项（`defaults`、`envFile`、`settingsFile`、`vocabFile`、`modelRoutes` 收掉：路径只在 `settings` 一处，词表当前读不读得开由 `vocabFileError` 说一句）。设置读回一律先与 `DEFAULTS` 合并，`seed()` 那个「只补空键」的入口随之收掉。**② 前端**：跨面板共享的东西归到 `core.js` 三处——`prefs`（反馈语言这类现读现用的偏好）、`LABELS`（掌握状态 / 主题 / 语言的文案，下拉选项与行内标签同一份来源）、`PANEL_TITLE`（从 `.nav-item` 现取）；`session-ui` 因此不再反向 import `settings-panel`，`add-words` 定位某个词改调 `vocab-list` 的 `locateWord()`，下拉填充统一成 `fillSelect` / `fillOptions`，`estimate()` 直接回那句文案（实测单价留在 core 里不外漏）。搬进 `server/` 子目录那一版算过：十来处 import 改路径、构建脚本与本文依赖图全跟着动，换来的只是目录好看，没做。**③ 名字与图标**：页面标题、启动横幅、`capacitor.config.json` 的 `appName`、安卓 `strings.xml` 四处统一 VocabApp；图标用字典标记（Segoe Fluent Icons U+E8AC）压淡紫底 `#C9BFE4`、墨色 `#3B3463`，各 dpi 图标、开屏图与网页 `public/favicon.png` 同源生成。**④ 配色**：主色按用户点的名取雾霾紫，浅色主题 `--accent:#6f67a8`、深色 `#a79bd9`，浅色底与各层表面带一点紫调，深色整档下沉（`--bg:#0b0b10`、`--surface:#131319`；用户：「深色模式再深一点」），CEFR 六档色随主色重新配平；下拉箭头改自绘（`appearance:none` + data-URI，深浅两版），列表卡片、统计砖与设置分组补一层阴影，`::selection` 同色。**⑤ 文案**：界面每条提示、备注与 toast 过一遍 humanizer-zh——长句拆短，讲历史的那类写法（「不再 xxx」「已经不是 xxx」）删掉，堆叠的破折号与三段式排比拆成正常句子，说明只留「现在是什么、要怎么做」。**验证**：`node --test` 250/250；桌面与模拟器逐面板走一遍（加词、词表、学习、复习、设置、设备迁移），控制台干净；深浅两套用无头 Edge 出样张核对；新图标在桌面与开屏上确认。 |
 | D52 | 深色底改成中性灰、词头一行只留词、图标留白加大、补一套动效 | 用户四条：「图标有内容的部分缩小一点」「词表里面单词右边不应该放释义」「深色模式下感觉颜色太明艳了 尝试调整或者使部分区域对比明显一些」「增加一些动画」，看过样张再补一句「我的意思是背景太浓了」。**深色**：浓的是大片底色里的紫——同一股紫写在 11.5px 的标签字上刚好，铺成整面就发闷。底色整块向中性灰收（饱和砍掉六七成：`--bg #0b0b0d`、`--surface #17171a`、`--surface-3 #232327`、`--line #2e2e35`、`--accent-soft #1d1d23`、六档标签底同样收到只剩一点色相），颜色只留给字与描边；分层照旧拉开（surface/bg 1.10、line/surface 1.33），主色 `#9a90c4`、六档字色各降一档饱和。对比度按 WCAG 逐个核过：正文 15.7、次要 10.1、弱化 5.1、主色填充上的字 6.3、六档标签 6.5–7.3。移动版加载页与桥页的硬编码色跟着同步（这两页以前还是上一版的绿圈深灰）。**词头那一行**：只剩词 + 掌握标签 + 行尾按钮，释义与中文归义项行自己那行——一行只管一件事，同一份信息也不写两遍；`.def` 这条样式随之删掉。**图标**：字形占面从 62% 缩到 46%（自适应前景层 56%→40%、favicon 59%→45%、开屏 28%→22%），淡紫底与圆角不变，各 dpi 与开屏图重出。**动效**：词汇四条——`rise-in` 新东西出现、`fade-in` 就地展开、`pop-in` 票框、`pulse-soft` 还在跑。列表逐条浮进来（渲染时给前 12 行写 `--i` 排队，起点 0.35 不是全透明，所以勾选后整表重画只是轻轻一下，几百行也不会排两秒）；草稿卡用 `rise-in`，定档依据展开时内容淡进来、票框弹进来，跑着的那行状态轻轻呼吸；toast 退场也动一下，连着两条会把入场重放一遍（同一元素改 className 不会自己重来，得先重排一次）；导航、统计块、标签补悬浮与变色过渡，按钮按压缩一下。`prefers-reduced-motion` 改成一条 blanket 规则，以后加动效不必回来补清单。**验证**：250/250；无头 Edge 出六张样张（深浅 × 宽窄 + 手机两屏）；模拟器装新包，app drawer 看图标、CDP 量到 `row-in` 与 0/42/112ms 的排队延迟、深色 `--bg #0b0b0d`、词头行子元素只有 `word/tag/head-actions`、零横向溢出。 |
+| D53 | 命名与死代码扫一遍：词表面板改叫 vocab，加词撞上已有词时亮出「定位到该条」 | 用户：「颜色很好 改命名 顺带查查别的」。① **面板改名**：词表那块面板的 id 一直是 `panel-fill`／`data-panel="fill"`，是取消掉的「规范化面板」（里程碑 5）留下的——`?ptab=vocab` 因此永远打不开它。现在五块面板对齐成 add / vocab / learn / review / settings，`activateTab` 与 `PANEL_TITLE` 都按 `data-panel` 现取，改的只有 HTML 的两个名字与 `locateWord` 一处。② **名字骗人的地方**：`level-card.js` 里那个 `votes5` 装的是三票（D35 就降了），改成 `votesAll`；`.skip-btn` 现在管的是「+ 添加义项」与「生成例句」两颗小字按钮，与轮次那颗「不会」无关，改名 `.link-btn`；重构行里「#B1 → #C1」那截在 D52 删 `.def` 时漏下一处赋值，改成 `.move` 并补上规则。③ **导出面收窄**：只在自己模块里用的符号一律摘掉 `export`——core 的 `tokens`、vocab-list 的 `renderList`、cefr 的 `SOURCES`/`traceLookup`、ai 的 `judgeInstructions`、settings 的 `PORT_RANGE`，`createStateFile` 交回的 `file` 属性没人读也去掉。④ **注释与文案里的旧词**：启动横幅的「自测」（D25 起叫学习与复习）、`ai.js` 与两条测试标题里的「五次投票」、`session.js` 里回指 SKIP 的那句、移动入口注释里的旧应用名、`.gitignore` 里的「整测」与软链说法；`.env.example` 补上 `VOCAB_KEYS_FILE` 与 `VOCAB_DATA_DIR`。⑤ **一处文档承诺过但代码没做的**：§4.8 写着「词已存在则给『定位到该条』」，那颗按钮一直 `hidden`、没人点亮——`/api/commit-add` 的 409 `wordExists` 被并进笼统的「写入失败」。现在这一支单独认：状态行写「词头已存在：xxx」、按钮露出来，点它跳词表并筛到那一行。⑥ **测试口径**：裸 `node --test` 会把 `test/` 下每个 `.js` 都当测试文件跑一遍，共享夹具 `real-vocab.js` 因此被多算一条；脚本改成 `node --test test/*.test.js`，真实用例数 **249**（§6 表里逐行相加就是它）。**验到而没动手的**（都是接口层面的取舍，等他拍板）：`/api/commit-senses` 与 `/api/backups` 前端没有调用方（只被测试用着）；`cefr` 的 `lookup`/`sourceLabel` 生产路径只剩测试在调、定档那侧走的是 `trace`/`describe`；错误码 `exam*` 那一族是 D25 改名之前的叫法，牵动 §4.6/§4.7/§4.9 与两条测试；MIME 表里的 `.svg`/`.ico` 在 `public/` 没有对应文件；桥页 `back` 的兜底端口写死 5317，而两个真实调用方都会带 `?back=`。**验证**：249/249；无头浏览器与模拟器都过——词表面板进 `#panel-vocab`、`.link-btn` 计算样式与扩大的点击区在位、`.skip-btn` 归零、零横向溢出；「词已存在 → 亮按钮 → 跳到那一行」在模拟器上拿桩响应跑通整条（`/api/draft`、`/api/level/vote`、`/api/commit-add` 三处替身，一次上游调用都不发）。 |
 
 ### 3.1 为什么最小单位是义项
 
@@ -178,7 +179,7 @@
 
 ### 3.2 已废止 / 被取代
 
-- **「查表定档优先、查不到才由 AI 自判」与 `levelBasis` 这个字段**：2026-10-01 被 D30 取代。现在档位一律由 AI 看完全部参考后五票定，参考词表退成给模型的证据；`levelBasis` 不再产生，界面上也不再写「查表定档 / AI 判断」，改写成票型与一致度。
+- **「查表定档优先、查不到才由 AI 自判」与 `levelBasis` 这个字段**：2026-10-01 被 D30 取代。现在档位一律由 AI 看完全部参考后三票定，参考词表退成给模型的证据；`levelBasis` 不再产生，界面上也不再写「查表定档 / AI 判断」，改写成票型与一致度。
 - **闭卷判定「自由文本一律丢弃、`suggestion` 强制为空」**：2026-09-30 被 D27 取代。现在闭卷也允许写点评，只是要过「提示词自报 `safe` + 服务端机械比对」两道闸，三次都堵不住才退回只有代码文案。
 - **`.env` 里的 `VOCAB_FILE`、工具目录里的 `Vocabulary.md` 软链、`store.syncMirror` 的双向对齐**：2026-09-30 随 D26 一起下线。路径只留 `settings.json` 的 `vocabFile` 一处；写盘时的链接感知保留。
 - **自测与整测两种模式**（连同自测的「就考这个」、每行的「换例句」、按章节/难度/关键词抽一轮与「只从未掌握抽」勾选框）：2026-09-30 被 D25 换成「学习」与「复习」。判定不写盘这条主张仍在（D5），落地位置改成词表条目里的「考这个词」。`GET /api/random` 一并删除。
@@ -220,8 +221,8 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
    ├── desktop-host.js 桌面外壳：记事本打开配置文件 · Windows 原生文件选取框（只有 Windows 分支）
    ├── config.js    .env 解析（密钥、备份/设置/状态/CEFR 路径；词表路径与端口都不归它管）
    ├── settings.js  运行期偏好：DEFAULTS / createSettings（白名单校验；端口与局域网访问也在这里，D44）
-   ├── ai.js        网络层：chat / sensesEntry / judgeEntry（含闭卷点评的两道闸）/ exampleEntry / levelVote / testTarget
-   ├── cefr.js      CEFR 查表：parseQuery / createIndex / lookup / traceLookup / sourceLabel
+   ├── ai.js        网络层：chat / sensesEntry / judgeEntry（含闭卷点评的两道闸）/ exampleEntry / levelVoteBatch / testTarget
+   ├── cefr.js      CEFR 查表：createCefr → lookup / trace / describe（内部：createIndex / parseQuery / familyCandidates / sourceLabel）
    ├── session.js   学习/复习轮次状态机：mode / phase / queue / records · 三次机会 · 结算清单 · 一次写盘
    └── dirname.js   `import.meta.dirname` 垫片（内嵌内核是 Node 18）
         │
@@ -264,7 +265,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 - **state-file.js**：`createStateFile({file, fs})` → `read()` / `write(value)`，原子 JSON 落盘（临时文件 + 改名）。设置（`settings.json`）、轮次进度（`.state/session.json`）、密钥（`keys.json`）这类小状态都走它；词表本体走 `store.js`，那边要备份、轮转、认链接，是另一套规矩。
 - **desktop-host.js**：`openInEditor(file)`（记事本打开配置文件）与 `pickWindowsFile()`（PowerShell 原生文件选取框）。两者都只在 Windows 分支被路由调到，前端要靠 `/api/settings` 的 `platform` 与 `local` 才亮出对应按钮。
 - **config.js**：`loadConfig()` → `{dir, envFile, keysFile, readKeys, cefrFile, backupDir, settingsFile, stateDir}`；`keysFile` 是 getter，`readKeys()` 每次现读。密钥**只**来自 `VOCAB_KEY_*` 与 `keys.json`；可覆盖的路径类环境变量见 §5。词表路径不在这里，它在设置里（D26）；端口也不在这里，同样在设置里（D44）。`keys.json` 的位置由 `VOCAB_KEYS_FILE` 指定（D45），没指定时项目目录里存在同名文件就自动认出它——桌面版从设备包导入密钥正是落到这里，`.env` 本体始终一个字节不动（D16）。
-- **settings.js**：`DEFAULTS = {vocabFile:null, model:null, extraModels:[], lang:'zh', theme:'auto', port:5317, lanAccess:false, prompts:{entry:null, judge:null}}`。`createSettings({stateFile, keyNames})` 给 `get()` / `patch(changes)`：`patch()` 做白名单校验，非法值报 `400 badSettings`（`vocabFile` 给空串或空白一律驳回，它是必填；`null` 是「还没设置」这个合法状态；`port` 收 1024–65535 的整数，`lanAccess` 只收布尔），文件损坏时 `get()` 报 `settingsError` 且不静默覆盖，读回来的设置永远先与 `DEFAULTS` 合并再返回。`PORT_RANGE` 与 `resolvePort(value, fallback)` 是端口的唯一判据——设置页校验、启动块读回、移动版兜底都调它。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应现有密钥名，`keyNames` 可传取值函数供移动版运行期现读），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。`port` 与 `lanAccess` 决定服务的监听端口与地址（D44），由 server.js 的启动块在启动时读一次，保存后重启才生效。
+- **settings.js**：`DEFAULTS = {vocabFile:null, model:null, extraModels:[], lang:'zh', theme:'auto', port:5317, lanAccess:false, prompts:{entry:null, judge:null}}`。`createSettings({stateFile, keyNames})` 给 `get()` / `patch(changes)`：`patch()` 做白名单校验，非法值报 `400 badSettings`（`vocabFile` 给空串或空白一律驳回，它是必填；`null` 是「还没设置」这个合法状态；`port` 收 1024–65535 的整数，`lanAccess` 只收布尔），文件损坏或读不懂时 `get()` 回 `{settings: DEFAULTS, error: {code: 'settingsUnreadable', …}}`、原文件一个字不动（响应里那个字段叫 `settingsError`），读回来的设置永远先与 `DEFAULTS` 合并再返回。端口的唯一判据是 `resolvePort(value, fallback)`（合法区间 `PORT_RANGE` 是它自己的模块常量），设置页校验、启动块读回、移动版兜底都调它。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应现有密钥名，`keyNames` 可传取值函数供移动版运行期现读），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。`port` 与 `lanAccess` 决定服务的监听端口与地址（D44），由 server.js 的启动块在启动时读一次，保存后重启才生效。
 
 ### 4.4 session.js（学习 / 复习轮次）
 
@@ -292,7 +293,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 ### 4.6 ai.js（网络层与契约）
 
 - `chat(messages, {model, maxTokens, signal})` → 文本。统一走 `POST {所选模型的 baseUrl}/chat/completions`；模型必须出现在 `settings.json` 的 `extraModels` 里，否则报 `aiConfig` 并点名是哪个模型；`baseUrl` 末尾误带 `/chat/completions` 会被剥掉。`Authorization: Bearer` 用该模型 `keyName` 对应的 `VOCAB_KEY_*`。body 里**默认带一层关掉推理段的开关 `thinking: {type: 'disabled'}`**（这几个任务的输出都短、推理段却要烧上千 token，关掉它最省钱，见 D39/D40）；模型自己的 `extra` 覆盖它——写别的值就是它的值，**写 `null` 表示「这个模型别带这个字段」**（会拒绝未知参数、或关不掉思考的端点就靠这个，比如本机的智谱）。不发 `temperature`：推理型模型不认。超时 90s，失败重试 2 次（退避 1s/3s），**仅**对网络错误与 5xx/429 重试，4xx 不重试。**上游返回空内容也算可重试**（`aiEmpty`）：`content` 是空串多半是一次坏生成，推理段吃光预算或网关抽风都有可能，报错文案里带上 `finish_reason` 与用量，下次一眼能看出是哪一种。
-- `signal` 是「终止」用的（D32）：给了它就与 90s 超时并成一个（`AbortSignal.any`），中止时抛 `aiAborted` 且**不重试**——那是调用方的意思，不是上游故障。`sensesEntry`（①）与 `levelVote`（④）接受并透传它；判定与例句生成不收，那两个是单次调用，没有批量入口。
+- `signal` 是「终止」用的（D32）：给了它就与 90s 超时并成一个（`AbortSignal.any`），中止时抛 `aiAborted` 且**不重试**——那是调用方的意思，不是上游故障。`sensesEntry`（①）与 `levelVoteBatch`（④）接受并透传它；判定与例句生成不收，那两个是单次调用，没有批量入口。
 - `parseJsonTolerant`：剥代码围栏、取首个平衡的 `{...}`、单元素数组拆包。解析不出来就报错，不猜。要 JSON 的那三处（`sensesEntry` / `judgeEntry` / `exampleEntry`）在解析失败时**再要一次**，并把原始内容打到服务窗口（`[ai]` 开头）：一次坏生成不值得记成判定失败，留一行日志下次就不用靠猜。
 
 **① 补齐义项 `sensesEntry({word, current, withChinese}, {model, signal})`（草稿与重构共用；档位不由它定，见 D30）**
@@ -353,7 +354,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | `POST /api/refactor` | `{word, model?}` | `{word,current,senses[],checked,note,trace,writeable,error}`；只给建议不写盘；词不存在 `404`、无模型 `503`。`senses[].level` 同样是 `null`；`writeable` 是**拿该条现有的档位当占位符探出来的「结构上能不能写」**（拿 `null` 去探会一律报 `badDifficulty`，见 D31），定档由前端逐条投票完成；这一路可以被客户端中途终止（D32） | |
 | `POST /api/refactor/commit` | `{items:[{word,senses[],checked?}]}` | `{changed,failed[],backup}`；逐词走 `planSetEntry`，一次写盘一份备份；写不进的词进 `failed` 并带原因 |
 | `POST /api/level/plan` | `{words:[…]}` | `{items:[{word,chapter,checked,referenceLevels,trace,covered,senses[]}], missing[]}`；**不调模型**，只出清单；`covered` 是该词在参考词表里的条目数（`levels + related`），为 0 表示当初的档位是纯 AI 自判、界面默认勾上；词表里查不到的词进 `missing` |
-| `POST /api/level/vote` | `{targets:[{word, sense?, definition?, example?}], model?}` | `{results:[{word,sense,from,level,votes[],valid,agree,mean,referenceLevels,trace}]}`；**一次判一批**（D37），每条跑三遍取平均；某条三票都不合法时它自己 `level: null`、`valid: 0`（不连累同批别的条目）。**每个目标两种形态**：给了 `definition` 就是草稿卡上那条还没写进词表的义项（`sense`/`from` 为 `null`），否则按 `sense` 序号取词表里的那条。一条义项**并行问三次**（每次都带上该词的参考档位），六档折成 0–5 取平均再四舍五入回档，`.5` 向上；空票（网络失败 / 坏 JSON / 非法档位）不进平均，一张有效票都没有时报 `502` 并把真实失败原因端上去；客户端一断开，这五次还没回来的调用一并中止（D32） |
+| `POST /api/level/vote` | `{targets:[{word, sense?, definition?, example?}], model?}` | `{results:[{word,sense,from,level,votes[],valid,agree,mean,referenceLevels,trace}]}`；**一次判一批**（D37），每条跑三遍取平均；某条三票都不合法时它自己 `level: null`、`valid: 0`（不连累同批别的条目）。**每个目标两种形态**：给了 `definition` 就是草稿卡上那条还没写进词表的义项（`sense`/`from` 为 `null`），否则按 `sense` 序号取词表里的那条。一条义项**并行问三次**（每次都带上该词的参考档位），六档折成 0–5 取平均再四舍五入回档，`.5` 向上；空票（网络失败 / 坏 JSON / 非法档位）不进平均，一张有效票都没有时报 `502` 并把真实失败原因端上去；客户端一断开，这三次还没回来的调用一并中止（D32） |
 | `POST /api/level/commit` | `{items:[{word,senses[],checked?}]}` | `{changed,failed[],backup}`；与 `refactor/commit` 同一条写盘路径（一次写盘一份备份），只是队名不同，界面上是「重定档位」 |
 | `GET /api/session` | — | `{state,current,preview,study}`；没有进行中的轮次时 `state/current/preview` 皆为 `null`；`state` 带 `mode` 与 `phase`，学习模式的看词段另有 `study: {index,total,word,chapter,senses[]}` |
 | `POST /api/session/start` | `{mode:'learn'\|'review', count?, model?, lang?, force?}` | `{state,current,study}`；`mode` 非法时 `400 badMode`；`count` 不是 1–500 的整数时 `400 badCount`（不给就用该模式的默认值）；池子里一个词都没有时 `400 emptyScope`；已有进度需 `force` |
@@ -381,7 +382,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 ### 4.8 UI
 
-单页五标签（加词 / 词表 / 学习 / 复习 / 设置），无框架、无路由、无构建。右上模型下拉对加词、学习与复习生效，默认取设置里的模型；任何写操作之后都有 toast 提示备份文件名。
+单页五标签（加词 / 词表 / 学习 / 复习 / 设置），无框架、无路由、无构建。右上那颗模型下拉管的是所有要花钱的地方：加词、词表的重构与重定档位、学习与复习，默认取设置里的模型；任何写操作之后都有 toast 提示备份文件名。
 
 反馈分两路（D49）：**收尾结果只走右下角 toast**（写盘多少、备份哪份、切到哪个文件、保存成没成），原地那一格清干净；页面上留着的只有「进行中」（导入中…／正在复判 5/9）与「等你动手」（有未保存的改动／还剩 N 条／当前读不了词表），以及清单里每一行自己的状态。
 
@@ -391,7 +392,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 前端按面板拆成 `public/js/` 下的十个模块（见 §4.1 的依赖图），`app.js` 只剩 import 与启动那几行。拆分的取向是「谁的面板谁认领」：每个模块在自己的作用域里给元素挂监听、渲染自己那块的 DOM，共享的只剩 `core.js`（`$` / `api` / `toast` / `report` / `deliverFile` / `state` / `prefs` / CEFR 常量与 `LABELS` / 面板切换 / `fitChrome` 防横滚）、`sense-ui.js`（义项编辑行与答题行，词表、加词、学习、复习四处都要用，形状必须一致）`session-ui.js`（学习与复习共用的看词卡、答题卡、结算清单与判定反馈）和 `level-card.js`（定档依据那块可展开的方框，加词、词表编辑、重构预览、重定档位四处共用）。这样改一个面板不必再在同一份文件里往上翻一千行。
 
-- **加词**：单词输入框（支持逗号或换行批量）加「附中文释义」开关，逐个出草稿卡片；跑起来后旁边多一颗「**终止**」（D32），管的是这一整轮——正在飞的调用连同它的上游请求一起停，半截的卡片整张丢掉。词还留在输入框里，再点一次「生成草稿」会跳过已有卡片、只做剩下的那些；「清空卡片」也顺带停掉这一轮。草稿卡就是**义项行列表**，与编辑表单同一板块：每行是难度、释义、中文、例句，加上「生成例句」「删除」，每条义项下面挂着**可展开的定档依据方块**（收起时是「#B1 · 一致 4/5」，点开是逐步查表命中、AI 五次回答与综合），可「+ 添加义项」。单条「写入」或「**写入全部**」；缺例句、第一条没释义或**没定出档位**的会跳过并汇总原因。成功后卡片变灰、状态行给出备份名，词已存在则给「定位到该条」。**档位由三票定（D30）**：草稿只交释义与例句，随后逐条义项跑三次定档（√n 并发，状态行写「定档中 1/2…」），档位下拉由「待定」变成票出来的那一档。
+- **加词**：单词输入框（支持逗号或换行批量）加「附中文释义」开关，逐个出草稿卡片；跑起来后旁边多一颗「**终止**」（D32），管的是这一整轮——正在飞的调用连同它的上游请求一起停，半截的卡片整张丢掉。词还留在输入框里，再点一次「生成草稿」会跳过已有卡片、只做剩下的那些；「清空卡片」也顺带停掉这一轮。草稿卡就是**义项行列表**，与编辑表单同一板块：每行是难度、释义、中文、例句，加上「生成例句」「删除」，每条义项下面挂着**可展开的定档依据方块**（收起时是「#B1 · 一致 3/3」，点开是逐步查表命中、AI 三票的回答与综合），可「+ 添加义项」。单条「写入」或「**写入全部**」；缺例句、第一条没释义或**没定出档位**的会跳过并汇总原因。成功后卡片变灰、状态行给出备份名，词已存在则给「定位到该条」。**档位由三票定（D30）**：草稿只交释义与例句，随后逐条义项跑三次定档（√n 并发，状态行写「定档中 1/2…」），档位下拉由「待定」变成票出来的那一档。
 - **词表**：顶部七块统计砖（词数、义项数、完全掌握/部分掌握/不掌握的**词**各一块、已掌握与未掌握的**义项**各一块），左边栏底部另有一份掌握进度，**两行都是「一行字 + 一根条」，条长得完全一样**（同高、同底色、同圆角，色段按比例铺在里面、剩下的留白就是还没掌握）：第一行是词的掌握情况，写成「完全 x · 部分 y · 不掌握 z」、条上只画完全（绿）与部分（暖色）两段；第二行是「已掌握义项 x / y」，条上画一段。工具栏是搜索、章节、难度、掌握状态（**完全掌握 / 部分掌握 / 不掌握**三选一），加一个「复选模式」开关。**每行词头后面挂一枚掌握标签**：「完全掌握」绿、「部分掌握」暖色且带「勾了几条/共几条」的进度、「不掌握」灰；完全掌握的词头另会压暗。**难度按义项算**：只要该词有任意一条义项命中所选档位就算命中；词头那行不标档位，档位只属于义项。每条义项行**行首各有自己的勾选框**，点一下即写盘并刷新，那是掌握状态的唯一入口。条目右下角另有一颗「考这个词」：点开就地展开答题卡，逐条填英文释义、逐条判定（走非闭卷那一支，判完给出表内对照与建议），每条义项另有一格**可选例句**（填了参与 pass，留空只判释义），通过的义项旁给一颗「勾选为已掌握」，**判定与展开都不写盘**，写盘只发生在你点那颗勾选按钮时，可以再点撤销；点了勾选不会把卡片冲掉，按「收起」回到词表行时才连统计一起刷新。点开「复选模式」后换一副面孔：义项行的框不再出现，词头前面长出多选框，行尾的「编辑」「删除」与「考这个词」也收起来；工具栏出现「全选当前筛选」，底下多一条操作栏（已选 N 个词、标记为已掌握、标记为未掌握、重构选中的词、重定档位、清空选择）。批量标记走 `POST /api/commit-mastery`，几十个词也只写一次盘、只出一份备份。再点一次「退出复选」回到平时的样子，已选会清空。
 - **用量看得见**：重构 / 复判 / 加词三处开跑前在提示行里报「预计约 N 次调用 · X token」（按实测单价估），跑起来进度里实时跟一句「已用 x token」——觉得贵随时点「终止」。
 - **多选 + 逐词重构**：选中若干词后点「重构选中的词」，**面板立刻把选中的词全摆出来**（这一段只读本地数据，不调模型），每行一句话说明它在干什么：排队中 → 生成中… → 定档中 n/N…；哪个词跑回来就填哪一行（旧档 → 新档、新义项逐条带可展开的依据方块、一句改动说明）。跑的顺序是 √n 分块（见 D33），进度行写「重构并定档 n/N…」。旁边有「**终止**」（跑完自动收起）：点它是关掉连接，跑完的行照旧留着、没跑到的行写「已终止，还没跑」，剩下的重跑一次补上。**默认全勾**——但只有定档完整的词才勾得动；某条义项定不出档位时那一行标成写不进并写明原因，勾选框禁用。「确认写入」一次写盘一份备份，写完的词从清单里摘掉、剩下的继续摆着，列表也一并刷新；**全写完了就自动收摊**。旁边还有「**取消**」：中止在飞的调用、收掉面板、一个字都不写。从露面到收摊这段时间，工具栏那四个批量按钮一直锁着（D41）。清单一长（几十行）就压到 340px 高，**右下角有拖柄，高度随你拖**（上限 85vh）——矮清单不留空框也不出拖柄。
@@ -461,7 +462,7 @@ VOCAB_KEY_ZHIPU=<智谱的 key>
 
 ## 6. 测试
 
-`node --test`，零依赖，250 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读真身的词表（路径从 `settings.json` 的 `vocabFile` 取），**测试不写真实词表**。
+`node --test`（脚本写成 `node --test test/*.test.js`：裸 `--test` 会把 `test/` 下每个 `.js` 都当测试文件跑一遍，共享夹具 `test/real-vocab.js` 因此会被多算一条），零依赖，249 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读真身的词表（路径从 `settings.json` 的 `vocabFile` 取），**测试不写真实词表**。
 
 | 文件 | 数量 | 覆盖 |
 |---|---|---|
