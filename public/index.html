@@ -144,6 +144,12 @@
                 <legend>词表文件</legend>
                 <div class="row">
                   <input id="vocabFile" type="text" placeholder="Vocabulary.md 的完整路径，例如 C:\Users\你\Notes\Vocabulary.md" />
+                  <button id="pickVocab" class="btn" type="button" hidden>浏览…</button>
+                </div>
+                <div class="row">
+                  <input id="vocabPickFile" type="file" accept=".md,.markdown,.txt" hidden />
+                  <button id="pickImportVocab" class="btn" type="button" hidden>选取词表并导入…</button>
+                  <span id="pickHint" class="save-state" hidden></span>
                 </div>
                 <p class="hint" id="vocabFileNote">
                   指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。

@@ -241,6 +241,28 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       resolve();
     });
   const grades = cefr || createCefr({ dataFile: config.cefrFile });
+
+  // Windows 的原生文件选择框（词表路径的「浏览…」按钮）。服务是桌面进程，弹窗会出现在
+  // 运行服务这台电脑的桌面上，所以只允许回环请求触发（见调用处）。取消时返回 null。
+  const pickWindowsFile = () =>
+    new Promise((resolve, reject) => {
+      const script = [
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+        'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
+        '$d = New-Object System.Windows.Forms.OpenFileDialog',
+        "$d.Title = '选择词表文件（Vocabulary.md）'",
+        "$d.Filter = 'Markdown 词表 (*.md)|*.md|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*'",
+        '$d.CheckFileExists = $true',
+        "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }",
+      ].join('\n');
+      const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true });
+      let out = '';
+      child.stdout.on('data', (c) => {
+        out += c;
+      });
+      child.on('error', reject);
+      child.on('close', () => resolve(out.trim() || null));
+    });
   const sessionRunner =
     session ||
     (ai
@@ -264,7 +286,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
   const getRoutes = {
     '/api/entries': () => ({ status: 200, body: readEntries(store) }),
 
-    '/api/settings': () => {
+    '/api/settings': (req) => {
       const { settings: s, error } = settingsStore.get();
       const keys = config.readKeys();
       return {
@@ -276,8 +298,11 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           contracts: { entry: CONTRACTS.entry, judge: CONTRACTS.judge },
           models: modelList(),
           keyNames: Object.keys(keys),
-          // 前端按平台收功能：「打开配置文件」只有 Windows 有（notepad），密钥值管理只在移动版有（keysFile）
+          // 前端按平台收功能：「打开配置文件」只有 Windows 有（notepad），密钥值管理只在移动版有（keysFile）；
+          // local 是「前端就在运行服务这台机器上」——IP 回环判定，决定「浏览…」按钮能不能用
+          // （它弹的是服务所在电脑的桌面文件框，只有本机亲眼看得到）。
           platform: process.platform,
+          local: isLoopbackRequest(req),
           keysFile: config.keysFile,
           modelRoutes: Object.fromEntries(s.extraModels.map((m) => [m.name, { baseUrl: m.baseUrl, keyName: m.keyName }])),
           envFile: config.envFile,
@@ -835,7 +860,17 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       }
       const out = settingsStore.patch(body);
       if (out.error) throw httpError(400, out.error.code, out.error.message);
-      return { status: 200, body: getRoutes['/api/settings']().body };
+      return { status: 200, body: getRoutes['/api/settings'](req).body };
+    },
+
+    // 弹系统文件框选一份词表（Windows 桌面专用，D47）：只有回环请求能用——弹窗出现在
+    // 运行服务这台电脑的桌面上，LAN 上的手机触发会弹在主人看不见的地方。取消返回 path: null。
+    // 只负责「选」，不写盘：前端拿到路径再走保存流程，或另调 /api/vocab/import 把它导入。
+    '/api/pick-file': async (req) => {
+      if (process.platform !== 'win32') throw httpError(501, 'notSupported', '此平台不支持服务端文件对话框');
+      if (!isLoopbackRequest(req)) throw httpError(403, 'localOnly', '文件对话框只会弹在运行服务这台电脑上');
+      const picked = await pickWindowsFile();
+      return { status: 200, body: { path: picked } };
     },
 
     // 整表导入：整份 Markdown 替换当前词表。先解析后写盘——解析不过的文件一个字节都不落，

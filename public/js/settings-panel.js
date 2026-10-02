@@ -24,6 +24,7 @@ let keyNames = [];
 // 密钥值管理（只写不读）只在移动版有——桌面版的密钥在 .env 里，工具绝不写它（D16）。
 let platform = 'unknown';
 let keysFile = null;
+let pickerMounted = false;
 
 function modelLabel(model) {
   let host = '';
@@ -55,10 +56,16 @@ function setSaveState(message, bad) {
 }
 
 const VOCAB_NOTE = '指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。';
+const VOCAB_NOTE_MOBILE = '手机上词表常驻应用沙盒，这条路径一般不用手改；要从外面换一份词表，用下面的「选取词表并导入…」。';
 
 function showVocabNote(problem) {
   const el = $('#vocabFileNote');
-  el.textContent = problem ? `当前读不了词表：${problem}。把路径改对再保存。` : VOCAB_NOTE;
+  if (problem) {
+    el.textContent = `当前读不了词表：${problem}。把路径改对再保存。`;
+  } else {
+    // 移动版没有「Obsidian 库里的路径」这回事，别让手机用户去找一个不存在的文件
+    el.textContent = keysFile ? VOCAB_NOTE_MOBILE : VOCAB_NOTE;
+  }
   el.className = problem ? 'hint bad' : 'hint';
 }
 
@@ -157,14 +164,19 @@ async function loadSettings() {
     fillModelSelect(body.models, settings.model);
     $('#keyFlag').hidden = Boolean(body.hasKey);
     $('#vocabFile').value = body.vocabFile || '';
-    showVocabNote(body.vocabFileError);
     $('#setPort').value = String(settings.port ?? 5317);
     $('#setLan').checked = Boolean(settings.lanAccess);
     platform = body.platform || 'unknown';
     keysFile = body.keysFile || null;
-    keyNames = body.keyNames || [];
+    // keysFile 定下来再写词表备注：移动版与桌面版的措辞不同
+    showVocabNote(body.vocabFileError);
     $('#openEnv').hidden = $('#openSettings').hidden = platform !== 'win32';
     $('#keysRow').hidden = $('#keysEditRow').hidden = $('#keysHint').hidden = !keysFile;
+    // 词表路径旁的「浏览…/选取并导入…」按平台与是否本机挂一次（重复 loadSettings 不重复挂）
+    if (!pickerMounted) {
+      pickerMounted = true;
+      mountVocabPicker({ platform, isLocal: Boolean(body.local), isMobile: Boolean(keysFile) });
+    }
     // 移动版没有 .env，那段「密钥写在 .env 里」的说明换成沙盒口径，别让手机用户去找不存在的文件
     if (keysFile) {
       $('#modelHint').textContent =
@@ -290,8 +302,8 @@ $('#importVocabFile').addEventListener('change', () => {
   }, 5000);
 });
 
-async function doImport(file) {
-  const state = $('#vocabTransfer');
+async function doImport(file, stateEl = $('#vocabTransfer')) {
+  const state = stateEl;
   if (!file) return;
   if (file.size > 900_000) {
     state.textContent = '文件超过 1MB 上限';
@@ -320,6 +332,51 @@ async function doImport(file) {
     const btn = $('#importVocab');
     delete btn.dataset.armed;
     btn.textContent = '从文件导入并替换…';
+  }
+}
+
+// 词表路径旁的「选取」（D47）。两端各一套：
+//  · Windows 桌面（且就在本机开页面）：调 /api/pick-file 弹**原生文件框**，选中即填路径并保存；
+//  · 移动版（keysFile 存在）：系统文件对话框选一份 md，读出来直接导入当前词表（手机上的路径固定在沙盒）。
+//  · 其他情况（如从手机浏览器访问电脑）：两个按钮都不显示，路径手填。
+function mountVocabPicker({ platform, isLocal, isMobile }) {
+  const browse = $('#pickVocab');
+  const pick = $('#pickImportVocab');
+  const hint = $('#pickHint');
+
+  if (platform === 'win32' && isLocal) {
+    browse.hidden = false;
+    browse.addEventListener('click', async () => {
+      hint.hidden = false;
+      hint.textContent = '等你在弹出的文件框里选…';
+      hint.className = 'save-state';
+      browse.disabled = true;
+      try {
+        const res = await api('/api/pick-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        if (!res.path) {
+          hint.textContent = '已取消选择';
+          return;
+        }
+        $('#vocabFile').value = res.path;
+        // 选中即保存并生效：路径改了 store 立刻换目标，省掉「还要记得点保存设置」这一步
+        const saved = await saveSettings({ vocabFile: res.path });
+        hint.textContent = saved ? `已选：${res.path}` : '已填入路径，但保存失败';
+        hint.className = saved ? 'save-state' : 'save-state bad';
+      } catch (e) {
+        hint.textContent = `打开文件框失败：${e.message}`;
+        hint.className = 'save-state bad';
+      } finally {
+        browse.disabled = false;
+      }
+    });
+  } else if (isMobile) {
+    pick.hidden = false;
+    pick.addEventListener('click', () => $('#vocabPickFile').click());
+    $('#vocabPickFile').addEventListener('change', () => {
+      const file = $('#vocabPickFile').files[0];
+      hint.hidden = false;
+      if (file) doImport(file, hint);
+    });
   }
 }
 

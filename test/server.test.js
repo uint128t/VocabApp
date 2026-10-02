@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createApp } from '../server.js';
+import { createApp, isLoopbackRequest } from '../server.js';
 import { createStore, createStateFile } from '../store.js';
 import { createSettings } from '../settings.js';
 import { parseEnv, loadConfig, readKeysFile } from '../config.js';
@@ -1613,4 +1613,22 @@ test('POST /api/migrate/import 拒绝不是设备包的东西', async () => {
   for (const bad of [{}, { pack: {} }, { pack: { kind: 'other', version: 1 } }, { pack: { kind: 'vocabapp-pack', version: 99 } }]) {
     assert.equal((await post(base, '/api/migrate/import', bad)).status, 400, JSON.stringify(bad));
   }
+});
+
+test('GET /api/settings 暴露 platform 与 local（回环判定）', async () => {
+  const { base } = await start();
+  const body = await (await fetch(`${base}/api/settings`)).json();
+  assert.equal(body.platform, process.platform);
+  assert.equal(body.local, true, '测试从 127.0.0.1 发起，应判定为本机');
+});
+
+test('isLoopbackRequest 只认本机地址（迁移导出与文件对话框的闸门）', () => {
+  const req = (addr) => ({ socket: { remoteAddress: addr } });
+  for (const addr of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
+    assert.equal(isLoopbackRequest(req(addr)), true, addr);
+  }
+  for (const addr of ['192.168.1.106', '10.0.2.2', '::ffff:192.168.1.20', '', undefined]) {
+    assert.equal(isLoopbackRequest(req(addr)), false, String(addr));
+  }
+  assert.equal(isLoopbackRequest(undefined), false, '没有 req 也当作不是本机');
 });

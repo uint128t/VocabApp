@@ -102,6 +102,10 @@ body {
   color: var(--fg);
   font: 14px/1.6 var(--font);
   -webkit-font-smoothing: antialiased;
+  /* 页面宽度按视口钉死：任何偶发溢出都不该变成整页横向滚动（手机上手势很容易误触）。
+     个别需要横向滚动的容器（顶部导航条、diff 框）自己在内部滚。 */
+  overflow-x: clip;
+  overscroll-behavior-x: none;
 }
 
 h1 {
@@ -800,10 +804,13 @@ button:disabled {
 
 .sense-def {
   color: var(--fg-2);
+  /* 长 URL / 长单词在窄屏上换行，而不是把整行顶宽 */
+  overflow-wrap: anywhere;
 }
 
 .sense-ex {
   color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 /* 看词卡：释义一行、例句一行，和答题卡的头部分开 */
@@ -1481,7 +1488,8 @@ button:disabled {
   right: 20px;
   bottom: 20px;
   z-index: 20;
-  max-width: 440px;
+  /* 窄屏上 440px 会从左边越出视口：宽度上限跟着视口收 */
+  max-width: min(440px, calc(100vw - 40px));
   padding: 10px 14px;
   border-radius: var(--radius);
   background: var(--surface);
