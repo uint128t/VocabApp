@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
+import dgram from 'node:dgram';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -907,6 +908,27 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
   });
 }
 
+// 找「真正对外的那个 IPv4」：UDP connect 不发包，只是让内核挑出口网卡，拿到的就是手机要用的地址。
+// 按网卡顺序取第一个不行——本机 vgate0（虚拟机网卡）就排在 Wi-Fi 前面，手机照着敲连不上。
+function primaryIPv4() {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket('udp4');
+    const done = (ip) => {
+      try {
+        sock.close();
+      } catch {}
+      resolve(ip);
+    };
+    sock.once('error', () => done(null));
+    try {
+      sock.connect(53, '223.5.5.5', () => done(sock.address().address));
+      setTimeout(() => done(null), 500);
+    } catch {
+      done(null);
+    }
+  });
+}
+
 // 移动版入口由 mobile-main.cjs 拉起（它先把数据路径指进应用沙盒、设 VOCAB_MOBILE=1）；
 // 桌面版仍按「node server.js 直接运行」判定。
 if (process.env.VOCAB_MOBILE === '1' || (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url)) {
@@ -972,7 +994,13 @@ if (process.env.VOCAB_MOBILE === '1' || (process.argv[1] && pathToFileURL(proces
         .flat()
         .filter((a) => a && a.family === 'IPv4' && !a.internal)
         .map((a) => a.address);
-      console.log(`局域网访问已开启：同一网络里的设备用 http://${ips[0] || '<本机IP>'}:${port} 打开（服务没有密码，别在公共网络开）`);
+      primaryIPv4().then((primary) => {
+        const main = primary || ips[0];
+        const others = ips.filter((ip) => ip !== main);
+        console.log(`局域网访问已开启：同一网络里的设备用 http://${main || '<本机IP>'}:${port} 打开（服务没有密码，别在公共网络开）`);
+        // 出口网卡猜错时（比如手机连的是另一张网卡），这一行里的地址可以挨个试
+        if (others.length) console.log(`其他网卡地址：${others.map((ip) => `http://${ip}:${port}`).join('、')}`);
+      });
     }
     console.log(`数据源：${current.settings.vocabFile || '（还没设置，请在设置页填词表路径）'}`);
     console.log(`生效模型：${current.settings.model || '（未设置，请在设置页选择）'}${current.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
