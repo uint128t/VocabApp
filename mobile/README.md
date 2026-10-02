@@ -1,4 +1,4 @@
-# Vocabulary 助手 · 安卓版（路线三）
+# VocabApp · 安卓版（路线三）
 
 把同一个 Node 后端嵌进 APK：`capacitor-nodejs`（内嵌 nodejs-mobile 内核，Node 18.20）在手机上跑 `server.js`，WebView 加载页收到「服务已就绪」后把主界面导航到 `http://127.0.0.1:5317/`——之后看到的就是与桌面完全相同的前端与后端。后端代码零重写，桌面端通过 `import.meta.dirname` 垫片与平台守卫保持原样。
 
@@ -6,10 +6,11 @@
 
 ```
 mobile/
-├── capacitor.config.json     appId / webDir / startMode: manual
+├── capacitor.config.json     appName: VocabApp · appId / webDir / startMode: manual
 ├── www/index.html + loader.js   加载页：订阅 bridge → NodeJS.start() → 收端口 → 跳转主界面
+├── www/storage.html + storage.js  原生能力桥页（只有这里能调插件）：mode=pick 要权限并选文件、mode=share 取内容写缓存弹系统分享（D48/D50）
 ├── nodejs-src/mobile-main.cjs   移动版入口：把数据路径指进应用沙盒，拉起 server.js，广播端口
-├── build-nodejs.mjs           组装 www/nodejs/（后端 9 个模块 + public/ + data/cefr.json + 入口）
+├── build-nodejs.mjs           组装 www/nodejs/（后端 11 个模块 + public/ + data/cefr.json + 入口）
 ├── fetch-vendor.mjs           下载 capacitor-nodejs 发布包到 vendor/（GitHub 直连不通走镜像）
 ├── smoke-desktop.cjs          桌面冒烟：mock bridge 跑整条移动启动链路
 ├── vendor/capacitor-nodejs-1.0.0-beta.10.tgz   插件发布包（含 Android 的 libnode，约 57MB，不入库）
@@ -27,15 +28,15 @@ npm install              # 装 Capacitor 8 + 插件；postinstall 顺带组装 w
 npm run android          # = 组装 nodejs + cap sync + gradlew assembleDebug
 ```
 
-产物：`android/app/build/outputs/apk/debug/app-debug.apk`（约 160MB，arm64/armv7/x86_64 三架构 debug 包）。传到手机安装即可；release 签名以后再说。
+产物：`android/app/build/outputs/apk/debug/app-debug.apk`（约 160MB，arm64/armv7/x86_64 三架构 debug 包）。传到手机安装即可；release 签名以后再说。桌面图标与开屏图在 `android/app/src/main/res/`（`mipmap-*/ic_launcher*.png`、`drawable-*/splash.png`、`values/ic_launcher_background.xml`），一套都出自同一个字典标记（淡紫底 `#C9BFE4` + 墨色 `#3B3463`），换图就整批重出。
 
 ## 首次启动
 
 1. 加载页转圈几秒（内核解包 nodejs 项目 + Node 起服务），收到端口后自动进入主界面。
 2. 移动版的数据全部在应用沙盒里（`getDataPath()`）：`Vocabulary.md`、`settings.json`、`keys.json`、`backups/`、`.state/`。首次启动没有词表时自动种一份空的。
-3. **最快的搬家方式（D46）**：在电脑上设置 →「设备迁移」→「导出设备包」（一个 `.vocabpack.json`，含密钥 + 设置 + 整份词表），发到手机（微信/网盘/数据线都行）；手机上设置 →「设备迁移」→「从其他设备导入…」选它，逐块比对、冲突并排 diff 逐项拍板后点「应用选择」——词表、模型、密钥一次配齐。反向（手机→电脑）同理；从手机导出会走系统分享面板（Filesystem + Share 插件）。
-4. **要让电脑与手机持续同步（D48）**：设置 →「词表文件」→「**选取词表文件…**」——选一份**任意外部文件**（放进 Syncthing 同步的文件夹的那个 md），它会先引导你去开「所有文件访问」，开完自动打开系统选择器；选中之后**词表就在那个文件上原地读写**（不拷进应用）。手机和电脑各装一个 Syncthing 把两端那个文件配成一对，改动秒级互传。选空文件会把当前词表写过去。注意两边**不要同时改**（单文件没有自动合并，冲突会生成本地副本），各自的写盘前备份（App 里 `backups/`、Obsidian 侧的历史）兜底。拿不到真实路径的位置（云盘、特殊来源）会被拒绝并提示改用下面的「从文件导入并替换…」。
-5. 只搬一次词表：设置 →「词表文件」→「**从文件导入并替换…**」选中一份 md 整表导入（自动备份），之后词表仍在应用沙盒里。带出去用「下载当前词表」。
+3. **最快的搬家方式（D46）**：在电脑上设置 →「设备迁移」→「导出设备包」（一个 `.vocabpack.json`，含密钥 + 设置 + 整份词表），发到手机（微信/网盘/数据线都行）；手机上设置 →「设备迁移」→「从其他设备导入…」选它，逐块比对、冲突并排 diff 逐项拍板后点「应用选择」——词表、模型、密钥一次配齐（**词表路径不跟着走**：手机是沙盒那份、电脑是库里那份，各设备各自一份）。反向（手机→电脑）同理；从手机导出会走系统分享面板（Filesystem + Share 插件）。
+4. **要让电脑与手机持续同步（D48）**：设置 →「词表文件」→「**选取词表文件…**」——选一份**任意外部文件**（放进 Syncthing 同步的文件夹的那个 md），它会先引导你去开「所有文件访问」，开完自动打开系统选择器；选中之后**词表就在那个文件上原地读写**（不拷进应用）。手机和电脑各装一个 Syncthing 把两端那个文件配成一对，改动秒级互传。选空文件会把当前词表写过去。注意两边**不要同时改**（单文件没有自动合并，冲突会生成本地副本），各自的写盘前备份（App 里 `backups/`、Obsidian 侧的历史）兜底。拿不到真实路径的位置（云盘、特殊来源）会被拒绝并提示改用下面的「从文件导入并替换…」。想回到沙盒那份，点旁边的「**用回应用内词表**」——沙盒里的词表原样用，不把当前这份搬过去（要往里写内容仍走「从文件导入并替换…」）；当前已经在沙盒那份时这颗按钮不出现。
+5. 只搬一次词表：设置 →「词表文件」→「**从文件导入并替换…**」选中一份 md 整表导入（自动备份），之后词表仍在应用沙盒里。带出去用「**下载当前词表**」或「导出设备包」——App 里没有浏览器下载这回事，这两颗都是**跳桥页 → 写进应用缓存 → 弹系统分享面板**（D50），选微信/网盘/数据线都行；不想分享就点页上的「返回应用」。
 6. AI 功能（加词/判定/重构/定档）需要密钥：走第 3 步的设备包最省事；手动配的话，设置 →「模型」→「新增候选」里加模型（接入点 + 密钥名），密钥**值**在「密钥管理」里填（只写不读，存应用沙盒的 `keys.json`；桌面版没有这一块，密钥仍在 `.env`）。
 
 ## 已知边界

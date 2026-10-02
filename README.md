@@ -1,4 +1,4 @@
-# Vocabulary 助手（VocabApp）
+# VocabApp
 
 本目录躺着一个零依赖的本地 Node 网页工具，围着 `Vocabulary.md` 这张手工攒的英语词汇表转。加词、判定掌握程度、按义项重校整张表，都交给 AI；词汇表本身仍是唯一数据源。
 
@@ -6,9 +6,9 @@
 
 词表真身在 Obsidian 库里，工具按**设置页里填的那个路径**去读写它（保存后立即生效，不用重启）。这个路径是唯一的来源——工具目录里没有软链，也没有「两处对齐」这回事（§4.8）。
 
-`node --test` 是全部测试，244 条。
+`node --test` 是全部测试，250 条。
 
-这份文档是唯一权威规格：数据格式、决策记录（D1–D42）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑，全在里面。接手时读完这一份就够了。它合并了早先的 `Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，那三份已经删除。
+这份文档是唯一权威规格：数据格式、决策记录（D1–D51）、模块接口、AI 契约、本地 API、配置密钥、测试与踩坑，全在里面。接手时读完这一份就够了。它合并了早先的 `Vocabulary-app-design.md`、`Vocabulary-format.md`、`Vocabulary-app-handoff.md`，那三份已经删除。
 
 ---
 
@@ -162,9 +162,14 @@
 | D43 | 摘掉 Oxford 两源、词频骨架换成 CC BY-SA 的 OpenSubtitles 50k | 用户问「现在有 ai 判词 是不是可以调成 public 了」——判词方式与仓库能不能公开无关：CEFR 表从来不是判词用的，它是定档的证据层（D30 起喂给模型当 reference、也是界面「档位依据」的数据源），所以卡点是**数据本身**的许可，不是谁在定档。The Oxford 3000/5000 与 Oxford Phrase List 只有个人自用授权、不可再分发（`data/cefr.json` 也由它们参与构建），由此整层摘掉；用户接着说「词频表可以找一个限制宽松一些的换上去」，于是把 google-10000-english 20k（许可靠猜）换成 **FrequencyWords（hermitdave）OpenSubtitles 2018 en 50k**（**数据 CC BY-SA 4.0**、代码 MIT，压在 `data/sources/opensubtitles-en-50k.txt`，46,717 个纯字母词）。剩下的三源都能再分发（CEFR-J 须注明出处、Octanove 与词频表都是 CC BY-SA 4.0），`data/cefr.json` 因此按 CC BY-SA 4.0 发布。**代价与收益**：43 个原本只靠 Oxford 定档的词落到常用度推算或表外，但词频表从 2 万扩到 4.67 万之后，全表覆盖反而从 **431/589 (73.2%)** 升到 **489/590 (82.9%)**；`cefr.js` 的 TIER/SOURCES 去掉两层、`trace` 变两张表，三条短语表用例删掉 |
 | D44 | 端口与局域网访问搬进设置：settings.json 的 `port` / `lanAccess`，服务可被同网络的手机打开 | 用户：「先走路线1 然后把端口设置从env里面改到settings.json里 设置界面里面也加一个选项」。`PORT` 从 `.env` 拿掉，`config.js` 不再读它；改由 `settings.json` 的 `port`（1024–65535 的整数，设置页交来的数字串也收）与 `lanAccess`（布尔）决定监听地址：开着绑 `0.0.0.0`、关着只绑 `127.0.0.1`。设置页新增「服务与访问」一块（端口数字框 + 局域网访问勾选）；这两项与 `vocabFile` 不同——**保存后要重启服务才生效**（`listen` 只在启动时发生），保存时检测到变化会在保存状态行与 toast 里写明。启动横幅在开了局域网访问时给出访问地址，方便手机照着敲：主地址按「出口网卡」挑（UDP connect 探一下，虚拟网卡不再抢到第一位——本机 vgate0 就排在 Wi-Fi 前面过），其余网卡地址列在下一行备选；同时写明「服务没有密码，别在公共网络开」。Window 防火墙需放行 node.exe 的入站（第一次开启时系统弹窗选「专用网络」）。模拟器实测手机浏览器直连电脑服务成功（读到电脑上的真词表）——本工具没有任何鉴权，这个口只开在自家网络（要在外面用就套 Tailscale）。`VocabApp.bat` 改从 `settings.json` 读端口（读不到或坏文件回退 5317），探活从 `findstr /c:"127.0.0.1:%PORT%"` 改成 `findstr /c:":%PORT% "` 以兼容 `0.0.0.0` 绑定。settings 校验有测试；沙盒配方改为在沙盒 settings.json 里写 `"port": 5318` |
 | D45 | 路线三：同一个后端打进安卓 APK（mobile/），数据住应用沙盒，密钥值可运行期管理 | 用户：「开始路线三」。选型 **Capacitor + capacitor-nodejs v1.0.0-beta.10**（内嵌 nodejs-mobile 内核，Node 18.20，插件要求 Capacitor ≥8、NDK 编 JNI 胶水；上游已停维护但换来后端零重写，`import.meta.dirname` 等新 API 由 `dirname.js` 垫片兜住）。启动链：加载页先订阅 bridge 通道再 `NodeJS.start()`（manual 模式保证消息不漏）→ 移动入口 `mobile-main.cjs` 把 settings/词表/备份/状态/密钥全部指进应用沙盒（nodejs 项目目录 App 更新时会被覆盖，数据绝不能放）→ 拉起同一个 `server.js` → 服务应答后广播端口（连报 20 秒）→ WebView 导航到 `http://127.0.0.1:端口`，之后与桌面同一套前后端。移动版首次启动自动种默认词表路径与空词表（安卓上没法手填路径）；新增 `/api/vocab/export|import`（整表导出带附件头 / 导入先解析后写盘、坏文件拒收、写前备份）与 `/api/keys`（移动版密钥值放沙盒 keys.json，**只写不读**，桌面版没有 keysFile 时返回 501——`.env` 工具绝不写的 D16 承诺不变）；`/api/settings` 暴露 `platform` 与 `keysFile`，前端据此藏掉「打开 .env/settings.json」、亮出密钥管理与导入导出。设置页「词表文件」块新增下载/导入（导入走「删除」同款两步确认）。构建链：JDK 21 + SDK 36 + NDK 28 + CMake，Gradle 发行版走腾讯镜像；`assembleDebug` 出三架构 debug 包约 160MB。桌面冒烟脚本 `mobile/smoke-desktop.cjs` 用 mock bridge 全链路验证（启动、种子、导出、密钥接口）。**模拟器实测修掉两处**：加载页原用 `import ... from 'capacitor-nodejs'`（无打包器时裸模块名解析不了，模块整个不执行、永远停在「正在启动词表服务」），改成从 `window.Capacitor.Plugins.CapacitorNodeJS` 取插件；并给 `capacitor.config.json` 加 `server.allowNavigation: ["127.0.0.1"]`，否则 WebView 往内嵌服务跳转会被当成外链丢给系统浏览器。移动版密钥管理与导入导出的界面文案按平台分流（桌面说 .env，移动说沙盒） |
-| D46 | 设备迁移：每个端都能「从其他设备导入」——.env 密钥 + settings.json + 词表打成一个设备包，冲突逐项选 | 用户：「每一个端都加一个功能 从其他设备导入所有内容 可选.env settings.json 和词表 遇到冲突展示diff让我自己选」。**包格式**：`vocab-device-<device>-<日期>.vocabpack.json`，含 `keys`（明文值，只在自己设备之间传）、`settings` 与整份 `vocabText`。**导出**：`/api/migrate/export` 只认**回环请求**——密钥值只有运行服务这台机器自己导得走，LAN 上的其他设备（哪怕开着 lanAccess）拿 403，桌面上从手机访问时导出仍然可用但包里只有设置与词表（前端据此提示）。**导入**：`/api/migrate/import` 三块各自比对——**词表按章节行（`### X`）对齐**（一样的跳过、只有一边有直接搬、两边都有且不同摆出两版原文画行级 diff）、**设置按字段**（model/extraModels/prompts/lang/theme/port/lanAccess/vocabFile，远端缺的字段按默认值补齐，一边空一边有值算单边、两边都有且不同才算冲突）、**密钥按名字**（只报有无与长度，永不回显值）。冲突未全部拍板前「应用选择」保持禁用并显示「还有 N 处冲突没选」。**写盘**：`/api/migrate/commit` 先解析校验再整份替换词表（留备份），设置走白名单 patch，密钥写运行时 keys.json。**桌面落点**：第一次导入密钥时生成项目目录的 keys.json（config 从此自动认领它，移动端 VOCAB_KEYS_FILE 指沙盒同名文件），`.env` 本体一个字节都不动（D16 不变）。前端独立成 `public/js/migrate.js`（导出下载/移动端走 Filesystem+Share 插件，冲突清单渲染与并排 diff），设置页新增「设备迁移」块。**实测**：桌面沙盒跑通「导入→拍板→应用→词表 591 词/设置逐项/密钥落 keys.json」，模拟器跑通同一流程（词表 alpha/beta 入库、model 采用远端、theme 保留本机、DESKTOPKEY 导入 + TESTKEY 保留）。**踩到两处**：migrate 路由要放 postRoutes（我起初误插进 getRoutes，还顺手删了 /api/backups 导致一串测试红），以及状态变化后要重算未决数（refresh 没有接到每个 change 上，「还有 4 处冲突没选」一直不变）。 |
+| D46 | 设备迁移：每个端都能「从其他设备导入」——.env 密钥 + settings.json + 词表打成一个设备包，冲突逐项选 | 用户：「每一个端都加一个功能 从其他设备导入所有内容 可选.env settings.json 和词表 遇到冲突展示diff让我自己选」。**包格式**：`vocab-device-<device>-<日期>.vocabpack.json`，含 `keys`（明文值，只在自己设备之间传）、`settings` 与整份 `vocabText`。**导出**：`/api/migrate/export` 只认**回环请求**——密钥值只有运行服务这台机器自己导得走，LAN 上的其他设备（哪怕开着 lanAccess）拿 403，桌面上从手机访问时导出仍然可用但包里只有设置与词表（前端据此提示）。**导入**：`/api/migrate/import` 三块各自比对——**词表按章节行（`### X`）对齐**（一样的跳过、只有一边有直接搬、两边都有且不同摆出两版原文画行级 diff）、**设置按字段**（model/extraModels/prompts/lang/theme/port/lanAccess，远端缺的字段按默认值补齐，一边空一边有值算单边、两边都有且不同才算冲突；「空」含空数组与全 `null` 的提示词，单边该采用哪边由服务端一次算好（字段上的 `takeRemote`），前端只照着摆勾选框——**词表路径不参与比对也不写回**：手机是沙盒那份、电脑是库里那份，搬过去只会把本机的路径弄坏）、**密钥按名字**（只报有无与长度，永不回显值）。冲突未全部拍板前「应用选择」保持禁用并显示「还有 N 处冲突没选」。**写盘**：`/api/migrate/commit` 按**密钥 → 设置 → 词表**的顺序走（模型候选的 `keyName` 必须能在本机找到，同一包里带来的密钥得先落盘，整套模型信息才配得齐），词表先解析校验再整份替换（留备份），设置走白名单 patch，密钥写运行时 keys.json。**桌面落点**：第一次导入密钥时生成项目目录的 keys.json（config 从此自动认领它，移动端 VOCAB_KEYS_FILE 指沙盒同名文件），`.env` 本体一个字节都不动（D16 不变）。前端独立成 `public/js/migrate.js`（导出下载/移动端走 Filesystem+Share 插件，冲突清单渲染与并排 diff），设置页新增「设备迁移」块。**实测**：桌面沙盒跑通「导入→拍板→应用→词表 591 词/设置逐项/密钥落 keys.json」，模拟器跑通同一流程（词表 alpha/beta 入库、model 采用远端、theme 保留本机、DESKTOPKEY 导入 + TESTKEY 保留）。**踩到两处**：migrate 路由要放 postRoutes（我起初误插进 getRoutes，还顺手删了 /api/backups 导致一串测试红），以及状态变化后要重算未决数（refresh 没有接到每个 change 上，「还有 4 处冲突没选」一直不变）。 |
 | D47 | 词表路径可「选取」：Windows 弹服务端原生文件框（仅本机），安卓走系统选择器导入 | 用户：「词表文件路径新增选取功能 兼容Windows和安卓」。两端各一套、都不手抄路径：**Windows 桌面**（且页面就在本机开）——词表路径旁多一颗「**浏览…**」，`POST /api/pick-file` 用 PowerShell 的 `System.Windows.Forms.OpenFileDialog` 弹**原生文件框**（服务是桌面进程，弹窗在服务这台电脑的桌面上，所以只允许回环请求触发，LAN 上 403，非 Windows 501；取消返回 `path: null`），选中即填路径并**顺手保存生效**；**安卓**——同一位置是「**选取词表并导入…**」，调系统文件选择器（`<input type=file>` + `file.text()`），选中后直接 `POST /api/vocab/import` 整表导入（手机上的路径固定在沙盒，没有「换路径」这回事，措辞也按平台分流：桌面说「Obsidian 库里那份」，手机说「常驻应用沙盒，用下面的选取导入」）；从手机浏览器访问电脑等其余情况两个按钮都不显示。`/api/settings` 因此多暴露一个 `local`（`isLoopbackRequest` 判定，纯函数有单测）。**顺带处理手机横向滚动**：用户反映「手机上横向可以滚动，我想按手机大小固定页面宽度」——桌面模拟（320/360/412px）与**手机 WebView 内 CDP 实扫**（各面板默认态、复选模式、编辑表单、考这个词卡、定档依据、加词卡、学习答题卡、长 URL、长 toast）都没有实际溢出；仍做了防御性加固：`body` 加 `overflow-x: clip` + `overscroll-behavior-x: none`（整页钉死宽度，个别容器自己内部滚）、`.sense-def/.sense-ex` 加 `overflow-wrap: anywhere`（长 URL 换行而不是顶宽）、`.toast` 宽度上限 `min(440px, 100vw - 40px)`（窄屏不再越出左边）。验证工具留在 `tools/cdp-eval.mjs`（经 adb forward 的 WebView 调试口执行任意表达式，模拟器实测用）。**实测**：Windows 文件框选了临时 md→路径真的写进 settings 并被保存（随后已还原真表路径）；模拟器点「选取并导入」选中 109KB 真表→手机词表变 590 词、备份留档。 |
-| D48 | 外部文件直接读写：手机上「选取词表文件…」选中的那份原地用（供 Syncthing 同步）；顶栏大字体修复 | 用户两条：「横向滑动的原因我帮你找到了 主题是深色或者浅色没事 如果是跟随系统就会文字过长」「我的直接读写外部文件要用上一步的选取文件按钮 要求可以自定义外部文件」。**① 横滚定位与修复**：按提示在模拟器把系统字体调到 1.3× 复现——`主题·跟随系统`（比「浅色/深色」宽两个汉字）撑宽顶栏、`重新读取` 被顶出视口（`scrollWidth 455 > 412`）；三层修法：顶栏主题按钮改短标签「主题·自动」（`title` 保留全称）、工具条在窄屏可收缩（长按钮让省略号）、`vocab-list` 的 `syncNavFit()` 实测 `side.scrollWidth > clientWidth` 时挂 `html.nav-compact` 收起概览（真实溢出驱动，正常字体照常显示）。1.3×/1.0× 双档复扫全零溢出。**② 外部文件**：一块按钮管两条路，终点都是 `POST /api/vocab/use-file`——把词表**切到任意一个已有 .md 并原地读写**：Windows 用服务端原生文件框选（仅回环，D47 已有）；安卓点「选取词表文件…」→ 桥页 `storage.html?mode=pick`（主界面 WebView 没有插件桥，权限与选择器都得在这里调）→ 先要「所有文件访问」→ 系统选择器选文件 → 插件把 `content://` 还原成真实路径（外置存储提供者按 `primary:`/`卷:` 拼；**媒体库 provider 的 `document:数字` 走 MediaStore `_DATA` 反查**——模拟器实测就是这条）→ `?picked=` 跳回自动切换。空文件按「把当前词表写过去」处理；解析不过的原样拒收；读/写不了（没权限、云盘位置）报 `externalDenied` 并引导去开权限。放进 Syncthing 同步的文件夹即自动同步。**实测**（模拟器）：选 `/storage/emulated/0/Documents/SyncthingDemo/Vocabulary.md` → 应用里勾选一条义项 → 该文件 `[ ]` 变 `[x]`（原地写实锤）、备份照留；取消选择、拿不到真实路径（云盘）的提示、切回沙盒都验过。旧的「使用共享存储文件夹」（写死 Documents/VocabApp）已撤掉。 |
+| D48 | 外部文件直接读写：手机上「选取词表文件…」选中的那份原地用（供 Syncthing 同步）；顶栏大字体修复 | 用户两条：「横向滑动的原因我帮你找到了 主题是深色或者浅色没事 如果是跟随系统就会文字过长」「我的直接读写外部文件要用上一步的选取文件按钮 要求可以自定义外部文件」。**① 横滚定位与修复**：按提示在模拟器把系统字体调到 1.3× 复现——`主题·跟随系统`（比「浅色/深色」宽两个汉字）撑宽顶栏、`重新读取` 被顶出视口（`scrollWidth 455 > 412`）；三层修法：顶栏主题按钮改短标签「主题·自动」（`title` 保留全称）、工具条在窄屏可收缩（长按钮让省略号）、`vocab-list` 的 `syncNavFit()` 实测 `side.scrollWidth > clientWidth` 时挂 `html.nav-compact` 收起概览（真实溢出驱动，正常字体照常显示）。1.3×/1.0× 双档复扫全零溢出。**② 外部文件**：一块按钮管两条路，终点都是 `POST /api/vocab/use-file`——把词表**切到任意一个已有 .md 并原地读写**：Windows 用服务端原生文件框选（仅回环，D47 已有）；安卓点「选取词表文件…」→ 桥页 `storage.html?mode=pick`（主界面 WebView 没有插件桥，权限与选择器都得在这里调）→ 先要「所有文件访问」→ 系统选择器选文件 → 插件把 `content://` 还原成真实路径（外置存储提供者按 `primary:`/`卷:` 拼；**媒体库 provider 的 `document:数字` 走 MediaStore `_DATA` 反查**——模拟器实测就是这条）→ `?picked=` 跳回自动切换。空文件按「把当前词表写过去」处理；解析不过的原样拒收；读/写不了（没权限、云盘位置）报 `externalDenied` 并引导去开权限。放进 Syncthing 同步的文件夹即自动同步。**实测**（模拟器）：选 `/storage/emulated/0/Documents/SyncthingDemo/Vocabulary.md` → 应用里勾选一条义项 → 该文件 `[ ]` 变 `[x]`（原地写实锤）、备份照留；取消选择、拿不到真实路径（云盘）的提示、切回沙盒都验过。旧的「使用共享存储文件夹」（写死 Documents/VocabApp）已撤掉。**③ 切回应用内词表**：切出去之后手机上得有条回头路——新增 `POST /api/vocab/use-internal`（**原样用**沙盒那份，文件缺了就建一份空的，不把当前内容搬过去：要往里写内容有「从文件导入并替换…」）与设置页那颗「**用回应用内词表**」（当前不是内部那份时才出现）。内部路径只有一个来源——启动块里的 `VOCAB_DATA_DIR/Vocabulary.md`，随 `GET /api/settings` 的 `internalVocabFile` 下发（桌面版 `null`）。前端「是不是手机那套界面」的判据也从 `keysFile` 换成 `internalVocabFile`：桌面版导过设备包一样会有 keys.json，那种机器从手机浏览器打开会亮出两颗注定点不动的选取按钮。**实测**（拿沙盒当手机：`VOCAB_DATA_DIR` + keys.json，经局域网地址打开就走手机那条分支）：从外部那份（544 词）点「用回应用内词表」→ 界面换成沙盒那份（1 词）、按钮自己收起、结果只弹 toast（D49 起原地不留字）；回环打开（桌面形态）三颗选取按钮都不出现；只有 keys.json、没有内部词表的「桌面被手机打开」形态下两颗选取按钮隐藏、密钥管理照常、备注仍是桌面措辞。 |
+
+| D49 | 收尾结果只走右下角弹窗；防横滚改用「量真实溢出 + 压字号」，不截省略号 | 用户：「手机端切换词表有时会又有横向滚动（提示文本太长）重启后好了……所有任务完成后的提示只用右下角弹窗反馈（不止此处）不要在原地反馈」「写一个通用的判断方法防止横滚」「避免横向滚动的逻辑从用省略号压缩改为之前的压缩字体大小 但是判断逻辑不变」。**① 反馈口径**：切词表、导入/导出词表、设备包三段、保存密钥、测试连通、保存设置、重构与复判的写回……这些**收尾结果一律只弹右下角 toast**，页面上那一格清干净——原地只留「进行中」（导入中…／正在复判 5/9／排队中）与「等你动手」（有未保存的改动／还有 N 处冲突没选／已终止·还剩 N 条／当前读不了词表）。清单里每一行自己的状态（卡片的「已写入 · 备份 …」、复判行的「#B1」）照旧留着，那是清单的可读性不是提示。统一走 `core.report(el, message, bad)`：清格 + 弹窗一次做完。**② 通用防横滚**：`core.overflows(el)` / `fitRow(el)` / `fitChrome()`（resize 与数据变化时各调一次）。判据是**真实占位**：`scrollWidth` 超过 `clientWidth`，且**不换行的行再按「子元素总宽 + 间隙」量一遍**——右对齐的行（顶栏工具条）塞不下时内容往左跑，`scrollWidth` 一点不长，只量它必漏（实测：加了两个按钮都报「没溢出」）。处置是**压字号**：行内字号写成 `calc(基准 * var(--fit, 1))`，`fitRow` 按比例一步算到刚好塞下再逐步微调（下限 0.8），没溢出就把 `--fit` 复位，字号自己回来。工具条那条不再用省略号截字（`text-overflow: clip`）——文字截掉了人还得猜它是什么；窄屏导航那一行维持原判据（真放不下就收起概览，与 D48 一致）。**③ 那个「提示文本太长」的根因**：`.settings fieldset` 的 UA 默认 `min-inline-size: min-content`，被一长串不可断的文字（完整路径）顶宽到 432px（视口 412）→ 整页横滚 20px，重载后提示没了就「好了」。修法：`fieldset { min-inline-size: 0 }` + 状态格与 `.toast` 加 `overflow-wrap: anywhere`（长串在任意处断开）。**实测**（模拟器 vocab35，系统字体 1.3×）：长路径提示下 `htmlOver` 20 → **0**；主题按钮「主题·自动」完整显示（`clip`，92/92）；人为把工具条撑爆 → `--fit 0.800`、字号 16.37 → 13.09px、不截断、整页仍 0 溢出，收回后复位逻辑正常；1.0× 下 `--fit` 压根不出现（不瞎缩）。真机面上逐个点过：切词表 → 只弹「词表现在是 … 里那一份（2 词）」+ 原地清空；「用回应用内词表」→ 弹窗 + 切回 590 词；保存设置 → 弹「设置已保存」+ 状态行空；测试连通缺参数 → 弹「请填模型名和接入点」+ 原地位空。桌面浏览器同验（`min-inline-size: 0px`、无省略号、无 JS 报错）。 |
+
+| D50 | 手机上的文件出口走系统分享（桥页）；防横滚改成「连着两帧都溢出才处置」 | 用户两条：「安卓端无法下载当前词表」「安卓端替换完词表文件工具条会缩小 第二次打开又恢复正常」。**① 导出为什么在手机上从来没通过**：主界面（`http://127.0.0.1:5317`）那个 WebView 里 `window.Capacitor` 压根不存在（实测），`<a download>` 点了不会有任何反应——而设备包导出那条路用「有没有 Filesystem/Share 插件」判断是不是原生，在这里永远判成桌面，所以那颗按钮在手机上同样是死的。改法：`core.deliverFile(name, url)` 一处决定去向——桌面交给浏览器下载，App 里跳 `storage.html?mode=share&name=…&src=…`，由桥页向内嵌服务取那一份内容（词表上百 KB，不从 URL 搬运）、写进应用缓存、弹系统分享。配套两件事：整份设备包改由**服务端一次拼好**（`vocabText` 进包，前端不再 fetch 两份再合并），LAN 上来导不再 `403`——包照样给，只是 `keys:{}` 加 `keysOmitted:true`；跨源那一跳开一条只认 Capacitor 自家 origin 的 CORS（见 §4.7）。分享面板被关掉时插件不一定回话（实测停在「正在打开分享」），所以「返回应用」在弹面板之前就亮出来。**② 工具条缩小**：判据是量出来的没错，但**单帧的量不算数**——替换完词表那一瞬布局还没落定，第一帧量到溢出先不动手，下一帧再量一次还在才压字号（`fitChrome` 里那道 `overflowSeen`）。顺带修掉 `naturalWidth` 的一处系统性高估：`display:none` 的子元素也被算了一道间隙（工具条 +6px、导航 +10px），字号本来就将将够的场景会被它误压。**实测**（模拟器 vocab35）：点「下载当前词表」→ 桥页地址与参数正确 → 应用缓存里出现 `Vocabulary-2026-10-02.md` → 系统分享面板起来（`clip={text/uri-list … U(content)}`）；点「导出设备包」→ 包里九个字段齐、`keys` 两把、`vocabText` 就是当前那份、`device: android`；取消分享后点「返回应用」回到 `http://127.0.0.1:5317/?ptab=settings`。防横滚回归（1.0×）：只脏一帧的宽按钮 → `--fit` 压根不出现；真的塞不下 → 压到 0.800（12.59 → 10.07px）；撤掉 → 自动复位。桌面同页两颗按钮都生成正确的 `<a download>`（文件名带日期）；重启后的服务导出带 `vocabText`（真表 590 词）与 `access-control-allow-origin: https://localhost`，而 `origin: https://evil.example` 一个头都不给。测试 249 → **250**。 |
+| D51 | 改名 VocabApp + 淡紫主题 + 底层与前端整理 + 界面文案过一遍 humanizer-zh | 用户四条：「根据设计哲学 整理/重构一下底层 前端 和目录结构 删除不需要的 可以解耦合的适度调整」「用 humanizer-zh 优化文案 精简繁杂文案 去掉否定性表述」「软件名字改为 VocabApp 并且优化图标」「软件主题色改为浅紫色 优化 ui 使其更有现代感」。**① 后端结构**：`createStateFile` 从 `store.js` 抽成 `state-file.js`——一个 JSON 小文件只要「临时文件 + 改名」，词表那一套还要备份、轮转、认链接，规矩不同；`notepad` 打开配置文件与 Windows 原生文件框抽成 `desktop-host.js`，「只有桌面才有的能力」集中在一处。两个新模块都只有 `server.js` 一个调用方，`mobile/build-nodejs.mjs` 的拷贝清单跟着补上（后端 11 块）。词头规则收进 `vocab.js` 的 `wordProblem()`，HTTP 入口与写盘校验读同一处；端口合法区间收进 `settings.js` 的 `PORT_RANGE` 与 `resolvePort()`，设置页校验、启动块读回、移动版兜底都调它。`config.js` 交钥匙的方式统一成 `readKeys()` 现读（`keys` / `keyNames` 两处快照撤掉），`/api/settings` 的响应只剩前端真读的十一项（`defaults`、`envFile`、`settingsFile`、`vocabFile`、`modelRoutes` 收掉：路径只在 `settings` 一处，词表当前读不读得开由 `vocabFileError` 说一句）。设置读回一律先与 `DEFAULTS` 合并，`seed()` 那个「只补空键」的入口随之收掉。**② 前端**：跨面板共享的东西归到 `core.js` 三处——`prefs`（反馈语言这类现读现用的偏好）、`LABELS`（掌握状态 / 主题 / 语言的文案，下拉选项与行内标签同一份来源）、`PANEL_TITLE`（从 `.nav-item` 现取）；`session-ui` 因此不再反向 import `settings-panel`，`add-words` 定位某个词改调 `vocab-list` 的 `locateWord()`，下拉填充统一成 `fillSelect` / `fillOptions`，`estimate()` 直接回那句文案（实测单价留在 core 里不外漏）。搬进 `server/` 子目录那一版算过：十来处 import 改路径、构建脚本与本文依赖图全跟着动，换来的只是目录好看，没做。**③ 名字与图标**：页面标题、启动横幅、`capacitor.config.json` 的 `appName`、安卓 `strings.xml` 四处统一 VocabApp；图标用字典标记（Segoe Fluent Icons U+E8AC）压淡紫底 `#C9BFE4`、墨色 `#3B3463`，各 dpi 图标、开屏图与网页 `public/favicon.png` 同源生成。**④ 配色**：主色按用户点的名取雾霾紫，浅色主题 `--accent:#6f67a8`、深色 `#a79bd9`，浅色底与各层表面带一点紫调，深色整档下沉（`--bg:#0b0b10`、`--surface:#131319`；用户：「深色模式再深一点」），CEFR 六档色随主色重新配平；下拉箭头改自绘（`appearance:none` + data-URI，深浅两版），列表卡片、统计砖与设置分组补一层阴影，`::selection` 同色。**⑤ 文案**：界面每条提示、备注与 toast 过一遍 humanizer-zh——长句拆短，讲历史的那类写法（「不再 xxx」「已经不是 xxx」）删掉，堆叠的破折号与三段式排比拆成正常句子，说明只留「现在是什么、要怎么做」。**验证**：`node --test` 250/250；桌面与模拟器逐面板走一遍（加词、词表、学习、复习、设置、设备迁移），控制台干净；深浅两套用无头 Edge 出样张核对；新图标在桌面与开屏上确认。 |
 
 ### 3.1 为什么最小单位是义项
 
@@ -195,7 +200,7 @@
 浏览器 (127.0.0.1:5317)
   public/index.html · public/style.css         五面板 UI，无框架、无路由、无构建
   public/app.js                               入口：装配下面这些模块，再读一次数据后启动
-  public/js/core.js                           基础层：$ / api / toast / state / 面板切换 / inChunks（√n 滚动并发，可中止）
+  public/js/core.js                           基础层：$ / api / toast / report / deliverFile / state / 面板切换 / inChunks（√n 滚动并发，可中止）/ overflows·fitRow·fitChrome（防横滚）
   public/js/level-card.js                     定档依据方块：逐步查表命中 + AI 的几次回答 + 综合（可展开，加词与词表共用）
   public/js/sense-ui.js                       义项公共零件：编辑行 / 答题行（释义 + 可选例句）/ 档位下拉与定档调用
   public/js/vocab-list.js                     词表：统计·列表·就地编辑·复选批量·重构·考这个词·重定档位
@@ -204,28 +209,32 @@
   public/js/learn-panel.js                    学习：先看后考两段
   public/js/review-panel.js                   复习：抽完直接考
   public/js/settings-panel.js                 设置与主题
+  public/js/migrate.js                        设备迁移：导出设备包 / 导入并逐项比对 / 提交
         │ fetch JSON
         ▼
 server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入队列（末尾是 CLI 启动块）
-   ├── vocab.js     纯字符串层：parse / serialize / sortKey / plan* / applyEdits
-   ├── store.js     文件层：读 / 备份 / 原子写 / 软硬链处理 / 串行队列 / createStateFile
+   ├── vocab.js     纯字符串层：parse / serialize / sortKey / wordProblem / plan* / applyEdits
+   ├── store.js     词表文件层：读 / 备份 / 原子写 / 软硬链处理 / 串行队列 / 启动自检
+   ├── state-file.js 状态文件层：createStateFile（原子 JSON 写，设置与轮次进度都用它）
+   ├── desktop-host.js 桌面外壳：记事本打开配置文件 · Windows 原生文件选取框（只有 Windows 分支）
    ├── config.js    .env 解析（密钥、备份/设置/状态/CEFR 路径；词表路径与端口都不归它管）
    ├── settings.js  运行期偏好：DEFAULTS / createSettings（白名单校验；端口与局域网访问也在这里，D44）
    ├── ai.js        网络层：chat / sensesEntry / judgeEntry（含闭卷点评的两道闸）/ exampleEntry / levelVote / testTarget
-   ├── cefr.js      CEFR 查表：parseQuery / createIndex / lookup / describe / sourceLabel
-   └── session.js   学习/复习轮次状态机：mode / phase / queue / records · 三次机会 · 结算清单 · 一次写盘
+   ├── cefr.js      CEFR 查表：parseQuery / createIndex / lookup / traceLookup / sourceLabel
+   ├── session.js   学习/复习轮次状态机：mode / phase / queue / records · 三次机会 · 结算清单 · 一次写盘
+   └── dirname.js   `import.meta.dirname` 垫片（内嵌内核是 Node 18）
         │
         ▼
    Vocabulary.md + .state/session.json + settings.json + data/cefr.json → OpenAI 兼容 /chat/completions
 ```
 
-依赖是单向的：`server → {ai, session, cefr, settings} → {vocab, store}`。`vocab.js` 不 import 任何模块、不读文件、不碰网络，这是它能被纯字符串单测覆盖的前提，改动它必须只靠单测验证。`config.js` 只解析环境与路径，不碰业务；`store.js` 只管「怎么安全地读写那一个文件」，对词表长什么样一无所知。
+依赖是单向的：`server → {ai, session, cefr, settings} → {vocab, store}`。`vocab.js` 不 import 任何模块、不读文件、不碰网络，这是它能被纯字符串单测覆盖的前提，改动它必须只靠单测验证。`config.js` 只解析环境与路径，不碰业务；`store.js` 管「怎么安全地读写那一个文件」，只在启动自检时读一次内容；`state-file.js` 与 `desktop-host.js` 都只有 `server.js` 一个调用方——前者抽走 JSON 落盘，后者抽走「只有桌面才有」的两件事，移动版拷代码时带上它们即可，运行期不会被走到。
 
-前端没有环，但不是一条直线：`app.js` 装配五个面板模块，面板之间还有几条回头边——`add-words` 与 `session-ui` 写盘后都要调 `vocab-list` 的 `loadEntries()` 刷新列表，`session-ui` 还要读 `settings-panel` 的 `settings`（反馈语言的默认值）。反过来 `settings-panel` 不 import 任何面板模块：需要面板配合的两件事（改了词表路径重读列表、保存设置后让两个轮次面板对一遍）由 `app.js` 用回调接进去。面板模块各自认领自己的 DOM（`addEventListener` 写在模块里，`app.js` 只负责 import 与启动），数据刷新统一走 `vocab-list.js` 的 `loadEntries()`，跨面板的共享状态只有 `core.js` 的 `state` 与 `settings-panel.js` 的 `settings`。词表的 `selected` 与 `selectionMode` 是 `vocab-list.js` 私有的，别的面板改掌握状态一律回头调 `loadEntries()`，不直接碰它。档位常量 `CEFR` 只有 `core.js` 一份，前端任何地方都从这里取。
+前端没有环，但不是一条直线：`app.js` 装配五个面板模块，面板之间还有几条回头边——`add-words` 与 `session-ui` 写盘后都要调 `vocab-list` 的 `loadEntries()` 刷新列表，加词完成后定位那个词走同模块的 `locateWord()`。反过来 `settings-panel` 不 import 任何面板模块：需要面板配合的两件事（改了词表路径重读列表、保存设置后让两个轮次面板对一遍）由 `app.js` 用回调接进去。面板模块各自认领自己的 DOM（`addEventListener` 写在模块里，`app.js` 只负责 import 与启动），数据刷新统一走 `vocab-list.js` 的 `loadEntries()`，跨面板的共享状态只有 `core.js` 的 `state`（当前词表）与 `prefs`（反馈语言这类现读现用的偏好，设置面板落盘时顺手写它）。词表的 `selected` 与 `selectionMode` 是 `vocab-list.js` 私有的，别的面板改掌握状态一律回头调 `loadEntries()`，不直接碰它。档位常量 `CEFR`、下拉与状态文案 `LABELS`、面板标题 `PANEL_TITLE` 都只有 `core.js` 一份，前端任何地方都从这里取。
 
 数据侧另有两个非运行期资产：`tools/build-cefr-data.mjs` 把 `data/sources/` 的原始清单编译成 `data/cefr.json`（随代码提交，便于复现），以及 `backups/` 里的历史快照。
 
-移动版（D45）复用同一棵依赖树：`mobile/` 是一个 Capacitor 工程，构建脚本把 `server.js` 等 9 个后端模块连同 `public/`、`data/cefr.json` 原样拷进 `www/nodejs/`，由内嵌的 nodejs-mobile 内核执行；加载页与移动入口在 `mobile/nodejs-src/` 与 `mobile/www/`。构建与首次启动说明见 `mobile/README.md`。
+移动版（D45）复用同一棵依赖树：`mobile/` 是一个 Capacitor 工程，构建脚本把 `server.js` 等 11 个后端模块连同 `public/`、`data/cefr.json` 原样拷进 `www/nodejs/`，由内嵌的 nodejs-mobile 内核执行；加载页与移动入口在 `mobile/nodejs-src/` 与 `mobile/www/`。构建与首次启动说明见 `mobile/README.md`。
 
 ### 4.2 vocab.js（纯字符串层）
 
@@ -250,9 +259,11 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 ### 4.3 store.js / config.js / settings.js
 
-- **store.js**：`readFile()`、`writeWithBackup(text)`、`enqueue(fn)`（串行队列）、`listBackups()`、`selfCheck()`、`createStateFile({file})`（原子 JSON 写，用于考试进度与设置）。启动时校验词表存在可写，并做一次 `parse` 自检；失败就拒绝启动并打印错误行号。
-- **config.js**：`loadConfig()` → `{dir, envFile, keys, keysFile, readKeys, keyNames, cefrFile, backupDir, settingsFile, stateDir}`。密钥**只**来自 `VOCAB_KEY_*`；可覆盖的路径类环境变量见 §5。词表路径不在这里，它在设置里（D26）；端口也不在这里，同样在设置里（D44）。移动版另有 `VOCAB_KEYS_FILE`（D45）：密钥值放应用沙盒的一个 JSON 文件，`readKeys()` 每次现读、运行期可增改；桌面版没有它，`.env` 仍是密钥的唯一来源。
-- **settings.js**：`DEFAULTS = {vocabFile:null, model:null, extraModels:[], lang:'zh', theme:'auto', port:5317, lanAccess:false, prompts:{entry:null, judge:null}}`。`patch()` 做白名单校验，非法值报 `400 badSettings`（`vocabFile` 给空串或空白一律驳回，它是必填；`null` 是「还没设置」这个合法状态；`port` 收 1024–65535 的整数、设置页交来的数字串也收，`lanAccess` 只收布尔），文件损坏时报 `settingsError` 且不静默覆盖。`seed(fields)` 只补设置文件里完全没有的键，写过的键——哪怕值是 `null`——一律不动。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应现有密钥名，keyNames 可传取值函数供移动版运行期现读），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。`port` 与 `lanAccess` 决定服务的监听端口与地址（D44），由 server.js 的启动块在启动时读一次，保存后重启才生效。
+- **store.js**：`target()`、`readFile()`、`writeWithBackup(text)`、`listBackups()`、`enqueue(fn)`（串行队列）、`selfCheck()`。启动时校验词表存在可写，并做一次 `parse` 自检；失败就拒绝启动并打印错误行号。
+- **state-file.js**：`createStateFile({file, fs})` → `read()` / `write(value)`，原子 JSON 落盘（临时文件 + 改名）。设置（`settings.json`）、轮次进度（`.state/session.json`）、密钥（`keys.json`）这类小状态都走它；词表本体走 `store.js`，那边要备份、轮转、认链接，是另一套规矩。
+- **desktop-host.js**：`openInEditor(file)`（记事本打开配置文件）与 `pickWindowsFile()`（PowerShell 原生文件选取框）。两者都只在 Windows 分支被路由调到，前端要靠 `/api/settings` 的 `platform` 与 `local` 才亮出对应按钮。
+- **config.js**：`loadConfig()` → `{dir, envFile, keysFile, readKeys, cefrFile, backupDir, settingsFile, stateDir}`；`keysFile` 是 getter，`readKeys()` 每次现读。密钥**只**来自 `VOCAB_KEY_*` 与 `keys.json`；可覆盖的路径类环境变量见 §5。词表路径不在这里，它在设置里（D26）；端口也不在这里，同样在设置里（D44）。`keys.json` 的位置由 `VOCAB_KEYS_FILE` 指定（D45），没指定时项目目录里存在同名文件就自动认出它——桌面版从设备包导入密钥正是落到这里，`.env` 本体始终一个字节不动（D16）。
+- **settings.js**：`DEFAULTS = {vocabFile:null, model:null, extraModels:[], lang:'zh', theme:'auto', port:5317, lanAccess:false, prompts:{entry:null, judge:null}}`。`createSettings({stateFile, keyNames})` 给 `get()` / `patch(changes)`：`patch()` 做白名单校验，非法值报 `400 badSettings`（`vocabFile` 给空串或空白一律驳回，它是必填；`null` 是「还没设置」这个合法状态；`port` 收 1024–65535 的整数，`lanAccess` 只收布尔），文件损坏时 `get()` 报 `settingsError` 且不静默覆盖，读回来的设置永远先与 `DEFAULTS` 合并再返回。`PORT_RANGE` 与 `resolvePort(value, fallback)` 是端口的唯一判据——设置页校验、启动块读回、移动版兜底都调它。`normalizeModel` 要求 `name`、http(s) 的 `baseUrl`、`keyName`（必须对应现有密钥名，`keyNames` 可传取值函数供移动版运行期现读），可选 `extra`（JSON 对象，≤2000 字符）。提示词键只有 `entry` 与 `judge`，空串等于恢复默认，不认识的键直接忽略。`modelEndpoints({settings, keys})` 把模型映射成调用目标。`port` 与 `lanAccess` 决定服务的监听端口与地址（D44），由 server.js 的启动块在启动时读一次，保存后重启才生效。
 
 ### 4.4 session.js（学习 / 复习轮次）
 
@@ -322,6 +333,8 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 统一响应：成功 `200 {…}`；失败 `{error:{code,message,details?}}` 加 4xx/5xx。所有写接口内部都走 `store.enqueue`。
 
+两条导出接口（`/api/vocab/export`、`/api/migrate/export`）带一条窄窄的 CORS：只有请求头里的 `Origin` 是 Capacitor 自家那几个（`https://localhost`、`http://localhost`、`capacitor://localhost`）才回 `access-control-allow-origin`，别的 origin 一个头都不给。原因是安卓 App 里主界面那个 WebView 没有插件桥，把文件交出去只能靠桥页，而桥页与内嵌服务不同源（D50）；`Origin` 由浏览器写死、网页伪造不了，本服务又没有鉴权，所以只开这一寸。
+
 每个请求另挂一个请求级 `AbortController`：客户端断开（界面上的「终止」就是关掉连接）时中止，`/api/refactor` 与 `/api/level/vote` 把信号一路带到上游 fetch 上（D32）；响应写不回去时直接收工。
 
 | 方法 路径 | 请求 | 响应 |
@@ -351,15 +364,16 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 | `POST /api/session/pause` `…/resume` `…/abort` | `{}` | 暂停保留全部进度；暂停后作答、推进看词与结算 `409 examPaused`；放弃不改词表 |
 | `POST /api/session/lang` | `{lang}` | `{ok,lang}`；即时改本轮反馈语言并落盘 |
 | `POST /api/session/preview` `…/commit` | — / `{}` | 清单 `{add[],remove[],unchanged,skipped[],total}` / 结算结果 `{changed,backup,state,…}`，`add/remove` 每项是 `{word,sense,level}`；清单方向由本轮的 `mode` 决定 |
-| `GET/POST /api/settings` | 任意设置子集 | `{settings,settingsError,defaults,contracts,models,keyNames,platform,keysFile,modelRoutes,envFile,settingsFile,vocabFile,vocabFileError,hasKey}`；非法值 `400 badSettings`；`vocabFile` 给空串或空白 `400 badSettings`，指向的文件不存在 `400 badVocabFile`（存下来的是绝对路径） |
-| `GET /api/vocab/export` | — | 整表原文（`text/markdown` + 附件头），移动版把词表带出应用的正道 |
+| `GET/POST /api/settings` | 任意设置子集 | 两边都回同一份 `{settings,settingsError,contracts,models,keyNames,platform,local,keysFile,vocabFileError,internalVocabFile,hasKey}`；非法值 `400 badSettings`。`vocabFile` 给空串或空白 `400 badSettings`，指向的文件不存在 `400 badVocabFile`（存下来的是绝对路径）；`vocabFileError` 说的是「当前那个路径现在读不读得开」；`internalVocabFile` 是部署自带的应用内部词表（移动版沙盒那份，桌面版 `null`）；`local` 是回环判定，决定「浏览…」这类只能在本机用的按钮 |
+| `GET /api/vocab/export` | — | 整表原文（`text/markdown` + 附件头），移动版把词表带出应用的正道（手机上由桥页取这一份再弹系统分享，D50） |
 | `POST /api/vocab/import` | `{text}` | 先解析后写盘：解析不过 `400 parseErrors` 拒收，写盘留备份 |
 | `POST /api/vocab/use-file` | `{path}` | 把词表切到任意外部文件并原地读写：空文件写入当前词表，解析不过拒收，读/写不了 `400 externalDenied` |
+| `POST /api/vocab/use-internal` | `{}` | 切回应用内部词表（移动版沙盒那份）：原样用、不搬当前内容，文件缺了就建一份空的，解析不过 `400 parseErrors`；桌面版 `501 notSupported` |
 | `POST /api/keys` | `{keys:{名字:值}}` | 写运行时 keys.json（桌面没有 keysFile 时 `501 notSupported`）；只回密钥名，值永不外泄 |
 | `POST /api/pick-file` | `{}` | 弹系统文件框选一份词表（Windows 桌面专用，**仅回环**；取消 `path: null`）；只选不写盘 |
-| `GET /api/migrate/export` | — | 设备包（密钥 + 设置 + 词表）；**密钥值只有回环请求拿得到**，LAN 上 `403 localOnly` |
-| `POST /api/migrate/import` | `{pack, parts?}` | 三块各自比对：词表按章节、设置按字段、密钥按名字；`{vocab,settings,keys}` 里带两版内容供前端画 diff |
-| `POST /api/migrate/commit` | `{vocabText?,settings?,keys?}` | 按用户在冲突面板里拍板的结果写盘；词表替换留备份、坏文件拒收 |
+| `GET /api/migrate/export` | — | **整份设备包**（`keys` + `settings` + `vocabText` + `device`，一个请求拿全，D50）；**密钥值只有回环请求拿得到**，LAN 上来导包照样给、但 `keys` 是空的并带 `keysOmitted: true` |
+| `POST /api/migrate/import` | `{pack, parts?}` | 三块各自比对：词表按章节、设置按字段（**词表路径不参与**）、密钥按名字；每个字段带 `takeRemote`（单边时该采用哪边，空数组与全 `null` 的提示词都算空），`{vocab,settings,keys}` 里带两版内容供前端画 diff |
+| `POST /api/migrate/commit` | `{vocabText?,settings?,keys?}` | 按用户在冲突面板里拍板的结果写盘，**先密钥后设置**（模型候选的密钥名要能对上同一包里带来的密钥）；词表替换留备份、坏文件拒收 |
 | `GET /api/backups` | — | `{files[]}` |
 | `POST /api/open-config` | `{which:'env'\|'settings'}` | `{ok,file}`；用系统编辑器打开配置文件（不改内容） |
 | `POST /api/test-model` | `{model?, baseUrl?, keyName, extra?}` | `{ok,model,baseUrl,latencyMs}`；密钥名不存在 `400 badKeyName` |
@@ -368,9 +382,11 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 
 单页五标签（加词 / 词表 / 学习 / 复习 / 设置），无框架、无路由、无构建。右上模型下拉对加词、学习与复习生效，默认取设置里的模型；任何写操作之后都有 toast 提示备份文件名。
 
+反馈分两路（D49）：**收尾结果只走右下角 toast**（写盘多少、备份哪份、切到哪个文件、保存成没成），原地那一格清干净；页面上留着的只有「进行中」（导入中…／正在复判 5/9）与「等你动手」（有未保存的改动／还剩 N 条／当前读不了词表），以及清单里每一行自己的状态。
+
 卡片与清单上只写词头，**不标 `### 章节`**：表是按首字母分章的，一个词的章节看头一个字母就知道，标出来是废话。
 
-前端按面板拆成 `public/js/` 下的九个模块（见 §4.1 的依赖图），`app.js` 只剩 import 与启动那几行。拆分的取向是「谁的面板谁认领」：每个模块在自己的作用域里给元素挂监听、渲染自己那块的 DOM，共享的只剩 `core.js`（`$` / `api` / `toast` / `state` / CEFR 常量 / 面板切换）、`sense-ui.js`（义项编辑行与答题行，词表、加词、学习、复习四处都要用，形状必须一致）`session-ui.js`（学习与复习共用的看词卡、答题卡、结算清单与判定反馈）和 `level-card.js`（定档依据那块可展开的方框，加词、词表编辑、重构预览、重定档位四处共用）。这样改一个面板不必再在同一份文件里往上翻一千行。
+前端按面板拆成 `public/js/` 下的十个模块（见 §4.1 的依赖图），`app.js` 只剩 import 与启动那几行。拆分的取向是「谁的面板谁认领」：每个模块在自己的作用域里给元素挂监听、渲染自己那块的 DOM，共享的只剩 `core.js`（`$` / `api` / `toast` / `report` / `deliverFile` / `state` / `prefs` / CEFR 常量与 `LABELS` / 面板切换 / `fitChrome` 防横滚）、`sense-ui.js`（义项编辑行与答题行，词表、加词、学习、复习四处都要用，形状必须一致）`session-ui.js`（学习与复习共用的看词卡、答题卡、结算清单与判定反馈）和 `level-card.js`（定档依据那块可展开的方框，加词、词表编辑、重构预览、重定档位四处共用）。这样改一个面板不必再在同一份文件里往上翻一千行。
 
 - **加词**：单词输入框（支持逗号或换行批量）加「附中文释义」开关，逐个出草稿卡片；跑起来后旁边多一颗「**终止**」（D32），管的是这一整轮——正在飞的调用连同它的上游请求一起停，半截的卡片整张丢掉。词还留在输入框里，再点一次「生成草稿」会跳过已有卡片、只做剩下的那些；「清空卡片」也顺带停掉这一轮。草稿卡就是**义项行列表**，与编辑表单同一板块：每行是难度、释义、中文、例句，加上「生成例句」「删除」，每条义项下面挂着**可展开的定档依据方块**（收起时是「#B1 · 一致 4/5」，点开是逐步查表命中、AI 五次回答与综合），可「+ 添加义项」。单条「写入」或「**写入全部**」；缺例句、第一条没释义或**没定出档位**的会跳过并汇总原因。成功后卡片变灰、状态行给出备份名，词已存在则给「定位到该条」。**档位由三票定（D30）**：草稿只交释义与例句，随后逐条义项跑三次定档（√n 并发，状态行写「定档中 1/2…」），档位下拉由「待定」变成票出来的那一档。
 - **词表**：顶部七块统计砖（词数、义项数、完全掌握/部分掌握/不掌握的**词**各一块、已掌握与未掌握的**义项**各一块），左边栏底部另有一份掌握进度，**两行都是「一行字 + 一根条」，条长得完全一样**（同高、同底色、同圆角，色段按比例铺在里面、剩下的留白就是还没掌握）：第一行是词的掌握情况，写成「完全 x · 部分 y · 不掌握 z」、条上只画完全（绿）与部分（暖色）两段；第二行是「已掌握义项 x / y」，条上画一段。工具栏是搜索、章节、难度、掌握状态（**完全掌握 / 部分掌握 / 不掌握**三选一），加一个「复选模式」开关。**每行词头后面挂一枚掌握标签**：「完全掌握」绿、「部分掌握」暖色且带「勾了几条/共几条」的进度、「不掌握」灰；完全掌握的词头另会压暗。**难度按义项算**：只要该词有任意一条义项命中所选档位就算命中；词头那行不标档位，档位只属于义项。每条义项行**行首各有自己的勾选框**，点一下即写盘并刷新，那是掌握状态的唯一入口。条目右下角另有一颗「考这个词」：点开就地展开答题卡，逐条填英文释义、逐条判定（走非闭卷那一支，判完给出表内对照与建议），每条义项另有一格**可选例句**（填了参与 pass，留空只判释义），通过的义项旁给一颗「勾选为已掌握」，**判定与展开都不写盘**，写盘只发生在你点那颗勾选按钮时，可以再点撤销；点了勾选不会把卡片冲掉，按「收起」回到词表行时才连统计一起刷新。点开「复选模式」后换一副面孔：义项行的框不再出现，词头前面长出多选框，行尾的「编辑」「删除」与「考这个词」也收起来；工具栏出现「全选当前筛选」，底下多一条操作栏（已选 N 个词、标记为已掌握、标记为未掌握、重构选中的词、重定档位、清空选择）。批量标记走 `POST /api/commit-mastery`，几十个词也只写一次盘、只出一份备份。再点一次「退出复选」回到平时的样子，已选会清空。
@@ -381,7 +397,7 @@ server.js     HTTP 服务 · 路由表 · 请求校验 · 错误封装 · 写入
 - **删除该词**：点一次「删除」变成红色的「确认删除 xxx」，5 秒内再点一次才落盘（超时自动解除，不弹窗）。一次移除主行与全部义项行，写盘前自动备份，toast 给备份文件名。学习或复习跑到一半删掉的词不会卡住结算。
 - **学习**：工具栏是反馈语言、**抽词滑块加数字框**（1 到「还有义项没掌握」的词数——部分掌握 + 不掌握，默认 10，填的数字与拖的位置同步，值记在本地）与「开始学习」。点一下就从池子里随机抽那么多词，进**看词段**：一次只出一个词，卡上是词头、`第 i/N 个词` 与这个词**全部**的义项（档位、释义、例句，已经勾上的标「已掌握」当参考），按钮是「下一个 →」，最后一个之后变成「开始测试这些词」。看词段不判分、不写盘，刷新或重启能接着看。看完进**测试段**：闭卷，一个词一张卡，释义遮住，每条义项一行——档位、卡片上本来就摆着的例句、一个英文释义输入框与一格**可选例句**，行尾一颗「不会」。填哪条判哪条，**留空与点「不会」都算不会**，两种都进结算清单；某条判错但还有机会时，行上保留你写的释义与例句并标「还剩 n 次」，改一改可以再交一次（重渲染不会吃掉你正在打的字）。判定结果那一块是**代码文案 + 点评**：代码那句固定文案永远在，模型写出了安全的点评时另起一行「点评：…」；`unspecified` 那句笼统话在有点评时撤掉，省得两句打架。整张卡判完才出现「下一个词 →」，不自动翻页，方便你先把反馈看完。这一轮判完出清单：**通过的义项进「将勾选」**，勾选确认后一次写盘、一份备份。工具栏可切反馈语言（写进本轮状态、刷新后保持）、「暂停」（保留全部进度并落盘）／「继续本轮」／「放弃本轮」／「放弃并重开」；本轮还在跑时「开始学习」会收起来，要重来就点「放弃并重开」。进度实时落盘，刷新或重启服务都能接着考；池子里不足你要的那么多就抽多少算多少。**另一个模式有轮次在跑时**，进度那行会写「学习模式的那一轮还没结束（已判 3/8 条义项），去『学习』面板接着做」，整轮判完时改成「已经判完…去结算」。**结算或放弃之后这一轮就不在面板上留痕了**：进度行清空、结算清单那一块收起——这两个状态是终局，回到面板没什么可交代的，写回了几处、备份是哪份在点「结算并写回」那一瞬间的 toast 里报过；只有「已暂停」还摆着，那是在等你点「继续本轮」。
 - **复习**：工具栏同样只有反馈语言、抽词滑块加数字框（默认 30）与「开始复习」。从「掌握过一些」的词里随机抽那么多（部分掌握 + 完全掌握），**没有看词段**，直接进测试段——卡片、判定与翻页跟学习模式同一套。出清单时方向相反：**没通过的义项进「将取消」**，勾选确认后一次写盘、一份备份。其余（每条三次机会、暂停、跨重启续测、结算要勾选确认）与学习模式一致。
-- **设置**：**词表文件**（指向真实的 `Vocabulary.md`，保存后立即生效；留空或文件不存在会被驳回，备注里会写出当前状况；下面一行「下载当前词表 / 从文件导入并替换」做整表搬家——导入走「删除」同款两步确认，写盘前自动备份，解析不过的文件原样拒收）、默认模型（候选来自 `settings.json` 的 `extraModels`）、两套提示词覆盖与「恢复默认」（补齐义项、判定；清空即默认，固定契约只读展示在最后）、反馈语言、主题。判定那把提示词只管判定本身，闭卷那套规矩（代码表、点评的禁区、`safe` 自报）是调用时追加的，改不掉；生成例句与档位复判这两路的措辞不在设置里。「模型」这一块分两组：上面一行只放**默认模型**（现在用哪个），下面一组是**新增候选**（模型名 + 接入点 + 密钥 + 添加，外加一整行的附加参数 JSON）；候选列表只列已有模型，默认模型看上面那一行。模型区可「添加」「测试连通」「打开 .env」「打开 settings.json」（后两个只有 Windows 有），并明确提示工具不写 `.env`。「服务与访问」一块放**端口**（1024–65535）与**允许局域网访问**勾选（D44）——与词表路径不同，这两项保存后要重启服务才生效，保存时检测到变化会在保存状态与 toast 里写明。移动版（D45）没有 `.env`，模型区多一块**密钥管理**：列出已存密钥名、按名字写值（只写不读，存应用沙盒 keys.json，写完即可用于「新增候选」与测试连通）。「**设备迁移**」一块（D46）放**导出设备包**与**从其他设备导入…**：包里是密钥 + 设置 + 整份词表，导入时逐块比对、冲突处并排 diff 逐项拍板才放行。
+- **设置**：**词表文件**（指向真实的 `Vocabulary.md`，保存后立即生效；留空或文件不存在会被驳回，备注里会写出当前状况；下面一行「下载当前词表 / 从文件导入并替换」做整表搬家——导入走「删除」同款两步确认，写盘前自动备份，解析不过的文件原样拒收；**「下载当前词表」与「导出设备包」这两颗在手机上都是交给系统分享**（应用里没有浏览器下载这回事：主界面那个 WebView 调不到原生插件，只能跳桥页去写缓存并弹分享面板，D50））、默认模型（候选来自 `settings.json` 的 `extraModels`）、两套提示词覆盖与「恢复默认」（补齐义项、判定；清空即默认，固定契约只读展示在最后）、反馈语言、主题。判定那把提示词只管判定本身，闭卷那套规矩（代码表、点评的禁区、`safe` 自报）是调用时追加的，改不掉；生成例句与档位复判这两路的措辞不在设置里。「模型」这一块分两组：上面一行只放**默认模型**（现在用哪个），下面一组是**新增候选**（模型名 + 接入点 + 密钥 + 添加，外加一整行的附加参数 JSON）；候选列表只列已有模型，默认模型看上面那一行。模型区可「添加」「测试连通」「打开 .env」「打开 settings.json」（后两个只有 Windows 有），并明确提示工具不写 `.env`。「服务与访问」一块放**端口**（1024–65535）与**允许局域网访问**勾选（D44）——与词表路径不同，这两项保存后要重启服务才生效，保存时检测到变化会在弹窗里写明（原地那一格只留「有未保存的改动」这类待动手状态，D49）。移动版（D45）没有 `.env`，模型区多一块**密钥管理**：列出已存密钥名、按名字写值（只写不读，存应用沙盒 keys.json，写完即可用于「新增候选」与测试连通）；词表路径那一行还多一颗「**用回应用内词表**」（只在手机上、且当前不是沙盒那份时出现，切回去是原样用沙盒里那份、不搬当前内容）。「**设备迁移**」一块（D46）放**导出设备包**与**从其他设备导入…**：包里是密钥 + 设置 + 整份词表，导入时逐块比对、冲突处并排 diff 逐项拍板才放行；**词表路径不跟着走**（各设备各自一份，里面那条路径不参与比对、也不会被写回）。
 - **深浅色**：`html[data-theme]` 加 CSS 变量。`auto` 跟随 `prefers-color-scheme`，头部按钮在浅色、深色、跟随系统之间循环并写回设置；`<head>` 内联脚本先读 `localStorage` 定色，避免首帧闪白。
 - **窄屏（≤920px）**：左侧栏收成顶部一条横向导航（品牌名藏起来、导航项的小字注释也藏起来），这条**吸顶**，往下滚也能直接切面板；掌握概览压成一行「共 N 词 · M 条义项」，两张进度条在窄屏下不显示（数字去词表的统计砖看），因为它自带 111px、是顶部显得特别大的主因。面板名那张顶栏（`.topbar`）在窄屏下随页面滚走——两行都吸会永久吃掉一百多像素。**这两条都设成不换行**（`flex: none` + `nowrap`），宽度不够时缩字号（`clamp()` 跟着 `vw` 连续变化）而不是换行、也不出横向滚动条。再窄就一层层让位，阈值按「实测刚好塞不下」定，不提前藏：≤360px 才藏掉概览（数字词表里有）与面板名（当前导航项已写着是哪个面板），≤340px 藏掉「模型」两个字只留下拉，并把顶栏按钮的左右内边距与间距各压一档（差的就是那 8px）。361px 以上概览与面板名都在，300px 以上始终单行且无滚动条，再窄才会出现滚动条（那已经比常见手机还窄）。义项行也在这档改版式：例句独占一行，释义跟在档位后面占满余下的宽度。
 
@@ -430,11 +446,11 @@ VOCAB_KEY_ZHIPU=<智谱的 key>
 ```
 
 - **不要把 key 打进 shell 命令行。** 权限层会拦，而且没必要，服务端自己读。
-- **词表路径不在 `.env` 里**（2026-09-30 起）：它只存在设置页，也就是 `settings.json` 的 `vocabFile`——一个地方，改完保存立即生效，不用重启。换机器时把设置页那条路径填对就行。
+- **词表路径不在 `.env` 里**（2026-09-30 起）：它只存在设置页，也就是 `settings.json` 的 `vocabFile`——一个地方，改完保存立即生效，不用重启。换机器时把设置页那条路径填对就行；**设备包里的那条路径不会被写回**（各设备各自一份，见 D46）。
 - **端口与访问范围也不在 `.env` 里**（2026-10-02 起，D44）：`settings.json` 的 `port`（1024–65535 的整数）决定监听端口，`lanAccess` 决定只听本机（`127.0.0.1`，默认）还是对整个局域网开放（`0.0.0.0`）——开了它，同一 Wi-Fi 下的手机用 `http://本机IP:端口` 就能打开，启动横幅会列出本机 IPv4。**这两项保存后要重启服务才生效**；`VocabApp.bat` 自己会从 `settings.json` 读端口（读不到回退 5317）。本服务没有任何鉴权，局域网访问只开在自家网络里；要在外面用，套一层 Tailscale 之类的虚拟局域网。
 - **模型全平级（D16）**：`settings.json` 的 `extraModels` 里每条是 `{name, baseUrl, keyName, extra}`。`baseUrl` 必填，是该模型自己的 http(s) 接入点，末尾误带 `/chat/completions` 会被剥掉；`keyName` 必填，必须对应 `.env` 里某把 `VOCAB_KEY_名字`；`extra` 是可选的每模型附加参数 JSON 对象，压在默认参数之上（D39）。默认参数里那层 `thinking: {type: 'disabled'}` 是「关掉思考」，deepseek 与 dashscope 都认；**只有智谱要单独写一条** `{"thinking": null, "reasoning_effort": "low"}`——它收不下 `thinking`，又强制思考（`glm-5.3` 不允许关闭），只能退到它允许的最低档（D40）。按条目取接入点与钥匙，配错就报错并点名。
 - **密钥值只留在服务端**：`settings.json` 与所有 `/api/*` 响应里出现的都只是密钥名字，值不会露面，前端代码里也没有。加新模型等于 `.env` 加一把钥匙（如果还没有），再去设置页添一条带接入点的模型。
-- 其余可覆盖路径（一般用不上，测试沙盒与移动版用）：`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR`、`VOCAB_CEFR_FILE`、`VOCAB_KEYS_FILE`（密钥值 JSON，见 D45）。
+- 其余可覆盖路径（一般用不上，测试沙盒与移动版用）：`VOCAB_BACKUP_DIR`、`VOCAB_SETTINGS_FILE`、`VOCAB_STATE_DIR`、`VOCAB_CEFR_FILE`、`VOCAB_KEYS_FILE`（密钥值 JSON，见 D45）、`VOCAB_DATA_DIR`（移动版宿主在启动前把数据目录指进应用沙盒；它同时决定「应用内部词表」= 该目录下的 `Vocabulary.md`，设置页那颗「用回应用内词表」走的就是它，见 D48）。
 - 已知坑：**会拒绝未知参数的端点**收不下默认参数（OpenAI 官方如此，本机的智谱对 `thinking` 实测返回 400）：在那个模型的 `extra` 里写 `"thinking": null` 把它摘掉。**关思考的写法各家不一**（D40，实测）：deepseek 与 dashscope 都认 `"thinking": {"type": "disabled"}`（推理 token 直接归零），DashScope 另外还认老写法 `"enable_thinking": false`；智谱 `glm-5.3-flash` 关不掉（文档写明强制思考），只能写 `"reasoning_effort": "low"` 退到最低档。`thinking_effort` 不是这三家任何一个的参数，写了也是白写。
 - 提醒：key 曾在对话里明文出现过，若是长期有效的账号级 key，建议去控制台轮换。
 
@@ -442,20 +458,20 @@ VOCAB_KEY_ZHIPU=<智谱的 key>
 
 ## 6. 测试
 
-`node --test`，零依赖，246 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读真身的词表（路径从 `settings.json` 的 `vocabFile` 取），**测试不写真实词表**。
+`node --test`，零依赖，250 条。所有文件测试跑在 `os.tmpdir()` 的 fixture 或副本上；只有「真实词表往返 / 字母序」那几个用例读真身的词表（路径从 `settings.json` 的 `vocabFile` 取），**测试不写真实词表**。
 
 | 文件 | 数量 | 覆盖 |
 |---|---|---|
 | `test/vocab.test.js` | 36 | 无损往返（读真实词表逐字节校验主行与每条义项行）、`sortKey` 边界、插入位置与新建章节、**只接受新格式**（带框主行/无框义项行/`[]`/`·` 子行/孤儿子行都报错）、义项级勾选（单条/批量/词级）、`planSetEntry`（含只改第一条不丢义项）、`planSetSenses`、`planDeleteEntry`、`applyEdits` 重叠与越界拒绝、CRLF 保持、**例句里的 ` - ` 与词头里的方括号都被写入层挡住**（附一条「写进去会读回什么」的反例） |
 | `test/ai.test.js` | 43 | 容错解析（裸 JSON / 围栏 / 前后带话 / 数组包裹）、重试策略（429 两次后成功、400 不重试、空回复重试）、义项契约（废数据丢弃、最多三条、**档位留空等投票**）、判定规则与语言、`targetExample` 传参、例句参与 pass、**闭卷的点评闸门**（安全点评放行、命中表内释义重问、模型自报 `safe:false` 重问、三轮都漏就丢掉、`reason` 仍是代码、表内释义不外发）、`leaksMeaning` 的命中与「学习者自己写过的词不算漏」、学习者文本压成单行、`levelVote` 归一化与投票温度、**投票带上参考档位**、例句生成与校验、**中止立刻停手（`aiAborted`、不重试）** |
-| `test/server.test.js` | 77 | 全部路由的成功/校验/错误映射、密钥不外泄、**整表导出（附件头、原文下发）与导入（先解析后写盘、坏文件拒收、写前备份）**、**/api/keys（只在配了 keysFile 的部署可用、新密钥立即可用于模型校验、密钥值从不外泄）**、**设备迁移三段（导出仅回环、按章节/字段/名字比对、commit 写盘与拒收）**、**`local` 回环判定与 `isLoopbackRequest` 纯函数**、**use-file（切任意文件、空文件写入、坏文件与目录拒收、幂等、原地写盘）**、`senses[].checked` 与词级 `checked`、判定义项、勾选义项写盘、批量标记掌握（一次写盘一份备份、跳过未知词、无变化不写盘）、学习与复习各一条完整轮次（例句进 prompt、点评落盘、`reveal` 带点评）、开轮次带滑块数量与非法数量的拒绝、重构与批量写盘（**建议里的档位为 null、定档前写不进**）、**定档三段**（清单只查表不调模型并带逐步命中、三票取平均与半档向上、空票与全空票、两种投票目标、一次写盘一份备份）、路径穿越与请求体上限、**词头方括号在入口被拒**、静态资源不带缓存且认 MIME（含 `public/js/` 下的模块）、**客户端断连把正在跑的投票一并中止且不回写响应**（D32） |
-| `test/config.test.js` | 4 | `.env` 解析、密钥与路径覆盖（**PORT 不再归 config 管**）、config 不管词表路径、`VOCAB_KEYS_FILE` 合并与 `readKeys()` 现读 |
+| `test/server.test.js` | 81 | 全部路由的成功/校验/错误映射、密钥不外泄、**整表导出（附件头、原文下发）与导入（先解析后写盘、坏文件拒收、写前备份）**、**/api/keys（只在配了 keysFile 的部署可用、新密钥立即可用于模型校验、密钥值从不外泄）**、**设备迁移三段（导出的包一次带齐密钥/设置/词表、密钥只在回环下发、按章节/字段/名字比对、commit 写盘与拒收）**、**导出接口的 CORS 只认 Capacitor 自家 origin**、**迁移的两条口径（单边字段带 `takeRemote`、空数组与全 null 提示词也算空；词表路径不进比对；commit 先密钥后设置，同一包里的模型候选一次配齐）**、**`local` 回环判定与 `isLoopbackRequest` 纯函数**、**use-file（切任意文件、空文件写入、坏文件与目录拒收、幂等、原地写盘）**、**use-internal（切回应用内部词表、缺文件建空的、原样用不搬内容、解析不过拒收、桌面版 501）**、`senses[].checked` 与词级 `checked`、判定义项、勾选义项写盘、批量标记掌握（一次写盘一份备份、跳过未知词、无变化不写盘）、学习与复习各一条完整轮次（例句进 prompt、点评落盘、`reveal` 带点评）、开轮次带滑块数量与非法数量的拒绝、重构与批量写盘（**建议里的档位为 null、定档前写不进**）、**定档三段**（清单只查表不调模型并带逐步命中、三票取平均与半档向上、空票与全空票、两种投票目标、一次写盘一份备份）、路径穿越与请求体上限、**词头方括号在入口被拒**、静态资源不带缓存且认 MIME（含 `public/js/` 下的模块）、**客户端断连把正在跑的投票一并中止且不回写响应**（D32） |
+| `test/config.test.js` | 5 | `.env` 解析、密钥与路径覆盖（**PORT 不再归 config 管**）、config 不管词表路径、`VOCAB_KEYS_FILE` 合并与 `readKeys()` 现读、**项目目录里的 `keys.json` 不靠环境变量也会被认出**（设备包导入的落点，D46） |
 | `test/session.test.js` | 42 | 按模式分池（学习取「还有义项没掌握」、复习取「掌握过一些」，部分掌握两边都进）、抽词按词级整词入队、**抽词数量（默认值、滑块值、上限、池子截断、非整数与越界拒绝）**、池子不足与空池、学习看词游标推进到底自动转测试段、复习没有看词段、**整词一张卡且逐义项判**、留空即不会（不花调用）、例句随义项交出并落盘、闭卷敏感词取整词全部义项、每条义项三次机会、上游半途失败保留已判结果、乱序与越界拒绝、reveal 只给已判完的义项、翻页门禁、跨过被删的词、结算方向（学习只勾选 / 复习只取消）、preview/commit（含中途删词跳过）、断点续测、旧版本状态文件被忽略、暂停/继续/放弃、语言切换、**判词还在飞时暂停/放弃/重开不会被那份旧快照顶掉** |
 | `test/cefr.test.js` | 14 | 括号剥离、词形归并、**词根推测（两轮剥前缀后缀、根不在表里就表外）**、常用度兜底、表外不猜、真实词表全量跑（命中率下限）、数据文件自检 |
 | `test/settings.test.js` | 15 | 白名单校验、未知提示词键被忽略、模型归一化、默认值、`vocabFile` 必填（空串/空白被驳回、`null` 表示还没设置）、`port`/`lanAccess` 校验（数字串收、越界驳回、驳回了不动盘） |
 | `test/store.test.js` | 13 | 备份轮转只留 30 份、写入抛错原文件不变、原子写、selfCheck 报错误行号、**硬链原处写入**、**软链写到真身而不是链接名**、**`file` 传函数时每次重取目标（改了路径立刻生效）** |
 
-前端那九个模块是纯搬迁（外加共享的 `level-card.js`），`node --test` 兜不住，验收靠浏览器逐面板走一遍（沙盒配方见下面）。
+前端那十个模块是纯搬迁（外加共享的 `level-card.js`），`node --test` 兜不住，验收靠浏览器逐面板走一遍（沙盒配方见下面）。
 
 **人工端到端**（改完服务端代码**必须重启服务**，Node 不热加载；只改 `public/` 刷新页面即可）：真 key 冒烟 1 词草稿加 1 次判定；沙盒副本上跑加词、学习、复习、考这个词、重定档位、勾选、删除、重构各一条完整路径，`diff` 副本与原文件核对只有目标行变化，最后删副本。
 
@@ -480,7 +496,7 @@ VOCAB_KEY_ZHIPU=<智谱的 key>
 
 ### 7.2 追加功能
 
-二十个：单词行内编辑 · 学习与复习两种模式（`session.js`，取代原先的自测与整测）· 深浅色 · 设置页 + 提示词覆盖 · 模型全平级（D16）· 删除该词（D17）· CEFR 查表（D18）· 多义项（D19）· 多选 + 逐词重构（D20）· 草稿/重构合流（D21）· 义项级掌握（D22）· 词根推测（任务二：`cefr.familyCandidates` 两轮剥前缀后缀，标签「词根推测自 X」，比只做词形归并时多认出一批词）· 判词处可带例句与闭卷安全点评（D27）· 档位复判（D28，即任务三）· 抽词数量滑块（D29）· 档位一律三票定 + 定档依据的可展开方块（D30）· 定档与重构的 √n 分块并发（D31）· 重构与重定档位可中途终止（D32）· 重构改两段式（D33）· 输出预算一律给到上限 + 分块屏障改滚动并发（D34）。
+单词行内编辑 · 学习与复习两种模式（`session.js`，取代原先的自测与整测）· 深浅色 · 设置页 + 提示词覆盖 · 模型全平级（D16）· 删除该词（D17）· CEFR 查表（D18）· 多义项（D19）· 多选 + 逐词重构（D20）· 草稿/重构合流（D21）· 义项级掌握（D22）· 词根推测（任务二：`cefr.familyCandidates` 两轮剥前缀后缀，标签「词根推测自 X」，比只做词形归并时多认出一批词）· 判词处可带例句与闭卷安全点评（D27）· 档位复判（D28，即任务三）· 抽词数量滑块（D29）· 档位一律三票定 + 定档依据的可展开方块（D30）· 定档与重构的 √n 分块并发（D31）· 重构与重定档位可中途终止（D32）· 重构改两段式（D33）· 输出预算一律给到上限 + 分块屏障改滚动并发（D34）· 定档降到三票（D35）· 一次定档一批、用量看得见（D37）· 默认关掉推理段与两处提示词瘦身（D39）· 推理型模型的参数写法（D40）· 清单面板点下去就开跑、勾选只管写不写回去（D41）· 掌握状态分三档（D42）· 端口与局域网访问（D44）· 打进 APK 的安卓版（D45）· 设备迁移与设备包（D46）· 词表路径可选取、外部文件原地读写（D47、D48）· 手机上的文件出口走系统分享（D50）· 防横滚改成实测驱动（D48–D50）· 淡紫主题与新图标（D51）。
 
 ### 7.3 待办
 
@@ -498,11 +514,12 @@ VOCAB_KEY_ZHIPU=<智谱的 key>
 ```
 VocabApp\             ← 代码 + 文档 + 配置，不在 Obsidian 库里
   README.md          唯一的权威规格（本文）
-  server.js vocab.js store.js config.js settings.js ai.js cefr.js session.js
-  public/            index.html · style.css · app.js（入口）+ js/ 九个模块
+  server.js vocab.js store.js state-file.js desktop-host.js config.js settings.js ai.js cefr.js session.js dirname.js
+  public/            index.html · style.css · app.js（入口）+ js/ 十个模块 + favicon.png
   test/              node --test 的全部用例
   data/              cefr.json + sources/（CEFR 原始清单）
   tools/             build-cefr-data.mjs
+  mobile/            Capacitor 安卓工程（后端同一套，构建与验证见 mobile/README.md）
   backups/           写盘前的快照（只留最近 30 份）
   .env settings.json VocabApp.bat package.json LICENSE .gitignore .gitattributes
 Notes\Vocabulary.md  ← 数据真身，Obsidian 库那边只留这一个文件
