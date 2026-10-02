@@ -130,9 +130,18 @@ function toast(message, kind = 'ok') {
   el.textContent = message;
   el.className = `toast ${kind}`;
   el.hidden = false;
+  // 连着弹两条时把入场动画重放一遍：同一个元素改 className 不会自己重来，得先让它重排一次。
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
   clearTimeout(toastTimer);
+  // 退场也动一下：直接 hidden 是「啪」地不见，看着像被吞了。
   toastTimer = setTimeout(() => {
-    el.hidden = true;
+    el.classList.add('out');
+    toastTimer = setTimeout(() => {
+      el.hidden = true;
+      el.classList.remove('out');
+    }, 200);
   }, 4000);
 }
 

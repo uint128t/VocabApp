@@ -55,37 +55,41 @@
 html[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0b0b10;
-  --surface: #131319;
-  --surface-2: #181820;
-  --surface-3: #1f1f29;
-  --line: #262530;
-  --line-strong: #3a3847;
+  /* 深色这一版：底子是中性灰，颜色只留给字与描边。分层照旧拉开（surface/bg 1.10、
+     line/surface 1.33），但每一层的饱和都砍掉六七成——紫调铺在大片底上会发闷，
+     同一股紫写在 11.5px 的标签字上刚好。对比度按 WCAG 算过：正文 15.7、次要 10.1、
+     弱化 5.1、主色填充上的字 6.3、六档标签 6.5–7.3。 */
+  --bg: #0b0b0d;
+  --surface: #17171a;
+  --surface-2: #1c1c20;
+  --surface-3: #232327;
+  --line: #2e2e35;
+  --line-strong: #46464e;
 
-  --fg: #ece9f4;
-  --fg-2: #c3bfd2;
-  --fg-muted: #8c869f;
+  --fg: #f1eff6;
+  --fg-2: #c9c5d7;
+  --fg-muted: #9690a8;
 
-  --accent: #a79bd9;
-  --accent-fg: #121019;
-  --accent-soft: #1d1a2c;
-  --accent-line: #3b3560;
+  --accent: #9a90c4;
+  --accent-fg: #14121d;
+  --accent-soft: #1d1d23;
+  --accent-line: #383841;
 
-  --danger: #eb9cb2;
-  --danger-soft: #24161c;
-  --danger-line: #4a2b36;
-  --warn: #dcb27c;
-  --warn-soft: #241c10;
+  --danger: #dd93a8;
+  --danger-soft: #231a1d;
+  --danger-line: #413a3e;
+  --warn: #cfa87a;
+  --warn-soft: #221e17;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 14px 36px rgba(0, 0, 0, 0.65);
 
-  --l-A1-bg: #14231b; --l-A1-fg: #82c79f;
-  --l-A2-bg: #102126; --l-A2-fg: #7bbcc7;
-  --l-B1-bg: #121d28; --l-B1-fg: #8cb2dd;
-  --l-B2-bg: #17162a; --l-B2-fg: #a39ee6;
-  --l-C1-bg: #1c1426; --l-C1-fg: #c39bd8;
-  --l-C2-bg: #211319; --l-C2-fg: #e094b0;
+  --l-A1-bg: #191d1a; --l-A1-fg: #7fb695;
+  --l-A2-bg: #181d1e; --l-A2-fg: #79adb7;
+  --l-B1-bg: #191c21; --l-B1-fg: #87a8cc;
+  --l-B2-bg: #1b1a21; --l-B2-fg: #9c98d6;
+  --l-C1-bg: #1d1920; --l-C1-fg: #bb93cd;
+  --l-C2-bg: #201819; --l-C2-fg: #d78ea9;
 }
 
 /* ---- 基础 ---- */
@@ -183,6 +187,11 @@ code {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.1s ease;
+}
+
+.nav-item:active {
+  transform: scale(0.985);
 }
 
 .nav-item small {
@@ -309,16 +318,14 @@ code {
   animation: rise-in 0.16s ease;
 }
 
-/* 动画只做点缀：系统关了动效就全部直出。 */
+/* 动画只做点缀：系统关了动效就全部直出（一条 blanket 规则，省得每加一个动效都要回来补一份清单）。 */
 @media (prefers-reduced-motion: reduce) {
-  .panel.active,
-  .toast {
-    animation: none;
-  }
-
-  .ov-bar i,
-  button {
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }
 
@@ -663,6 +670,15 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-1);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+@media (hover: hover) {
+  .stat:hover {
+    border-color: var(--accent-line);
+    box-shadow: var(--shadow-2);
+    transform: translateY(-1px);
+  }
 }
 
 .stat b {
@@ -701,6 +717,7 @@ button:disabled {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   vertical-align: 1px;
+  transition: background 0.16s ease, color 0.16s ease;
 }
 
 .tag[data-mastery="full"] { background: var(--accent-soft); color: var(--accent); }
@@ -794,10 +811,6 @@ button:disabled {
   color: var(--fg-2);
 }
 
-
-.def {
-  color: var(--fg-2);
-}
 
 .zh {
   color: var(--fg-muted);
@@ -1501,6 +1514,8 @@ button:disabled {
 }
 
 /* ---- 提示条 ---- */
+/* 动效词汇表：rise-in 是「新东西出现」的通用一下，fade-in 给就地展开的内容，
+   pop-in 给会消失的东西（标签、票框），pulse-soft 只用来标「还在跑」。 */
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -1511,6 +1526,87 @@ button:disabled {
     opacity: 1;
     transform: none;
   }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0.35;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pulse-soft {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* 列表逐条浮进来：渲染时给每行写 --i（0 起），只有前 12 行排队、后面的同时到位——
+   几百行的表不该为动效排两秒；起点 0.35 而非全透明，勾选后整表重画时只是轻轻一下。 */
+.list > .entry {
+  animation: row-in 0.16s ease backwards;
+  animation-delay: calc(min(var(--i, 0), 12) * 14ms);
+}
+
+.card {
+  animation: rise-in 0.16s ease backwards;
+}
+
+/* 展开定档依据时里面的内容淡进来，箭头自己会转。 */
+.level-card.open .level-body {
+  animation: fade-in 0.16s ease;
+}
+
+.level-card.open .vote-box {
+  animation: pop-in 0.18s ease backwards;
+}
+
+/* 跑着的那行状态一直在轻轻呼吸，一眼分得清「在跑」和「卡住」。 */
+.card.loading .card-status {
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+.toast.out {
+  animation: toast-out 0.2s ease forwards;
 }
 
 .toast {

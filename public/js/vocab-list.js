@@ -227,10 +227,6 @@ function entryNode(e) {
   word.className = 'word';
   word.textContent = e.word;
 
-  const def = document.createElement('span');
-  def.className = 'def';
-  def.textContent = e.definition || '（缺释义）';
-
   const head = document.createElement('div');
   head.className = 'head';
   if (selectionMode) {
@@ -241,13 +237,7 @@ function entryNode(e) {
     pick.addEventListener('change', () => toggleSelected(e.word, pick.checked));
     head.append(pick);
   }
-  head.append(word, def);
-  if (e.chinese) {
-    const zh = document.createElement('span');
-    zh.className = 'zh';
-    zh.textContent = e.chinese;
-    head.append(zh);
-  }
+  head.append(word);
 
   // 词头这行标掌握状态、不标档位：档位是按义项来的，只写在义项行上。部分掌握顺带写
   // 「勾了几条 / 共几条」，一眼能看出还差多少。
@@ -550,7 +540,12 @@ function renderList() {
       : '词表还是空的：去「加词」生成第一张草稿卡。';
     frag.append(empty);
   }
-  for (const e of shown) frag.append(entryNode(e));
+  for (const [i, e] of shown.entries()) {
+    const li = entryNode(e);
+    // 头几行排队浮进来（CSS 里 min(--i, 12) 封顶），后面的同时到位——只给排得上队的行写变量。
+    if (i < 12) li.style.setProperty('--i', i);
+    frag.append(li);
+  }
   list.append(frag);
   $('#count').textContent = `显示 ${shown.length} / ${state.entries.length}`;
   syncSelection();

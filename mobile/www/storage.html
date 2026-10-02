@@ -11,9 +11,16 @@
         min-height: 100vh;
         display: grid;
         place-items: center;
-        background: #0b0b10;
-        color: #ece9f4;
+        background: #0b0b0d;
+        color: #f1eff6;
         font: 14px/1.6 system-ui, "Segoe UI", "Noto Sans SC", "PingFang SC", sans-serif;
+      }
+
+      @keyframes rise-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
       }
 
       .box {
@@ -23,10 +30,17 @@
         padding: 24px;
         max-width: 420px;
         text-align: center;
+        animation: rise-in 0.18s ease;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .box {
+          animation: none;
+        }
       }
 
       #msg {
-        color: #8c869f;
+        color: #9690a8;
         font-size: 13px;
       }
 
@@ -39,15 +53,21 @@
         font: inherit;
         padding: 8px 18px;
         border-radius: 6px;
-        border: 1px solid #3a3847;
-        background: #a79bd9;
-        color: #121019;
+        border: 1px solid #46464e;
+        background: #9a90c4;
+        color: #14121d;
         font-weight: 600;
+        touch-action: manipulation;
+        transition: transform 0.1s ease;
+      }
+
+      button:active {
+        transform: translateY(1px);
       }
 
       button.ghost {
         background: transparent;
-        color: #ece9f4;
+        color: #f1eff6;
         font-weight: 400;
       }
     </style>
