@@ -129,7 +129,7 @@ test('复习抽整词已掌握的词，没有看词段，直接开考', async ()
   assert.deepEqual(started.queue, [word('absorb'), word('ballpoint')]);
   assert.equal(session.study(), null);
   assert.equal(session.current().word, 'absorb');
-  assert.throws(() => session.nextStudy(), (e) => e.code === 'examOutOfOrder');
+  assert.throws(() => session.nextStudy(), (e) => e.code === 'sessionOutOfOrder');
 });
 
 test('一轮的抽词条数没给滑块值时用默认：学习 10 个、复习 30 个', async () => {
@@ -279,7 +279,7 @@ test('一次通过记一次尝试，点评跟着记录落盘，并给出下一�
     open: 0,
     nextWord: 'bump',
   });
-  assert.equal(calls[0].opts.exam, true);
+  assert.equal(calls[0].opts.closedBook, true);
   assert.equal(calls[0].input.storedDefinition, undefined);
   assert.equal(calls[0].input.targetExample, 'The ship disappeared into the abyss.');
   // 点评要落盘：只放在响应里，提交后那一刻的重渲染就会把它冲掉。
@@ -383,15 +383,15 @@ test('上游半路报错时已判出来的先落盘', async () => {
 test('看词段不能作答，教学段翻页在复习里被拒', async () => {
   const { session } = setup();
   await session.start({ mode: 'learn' });
-  await assert.rejects(session.answer({ word: 'abyss', answers: [] }), (e) => e.code === 'examOutOfOrder');
-  await assert.rejects(session.skip('abyss', 0), (e) => e.code === 'examOutOfOrder');
-  assert.throws(() => session.advance(), (e) => e.code === 'examOutOfOrder');
+  await assert.rejects(session.answer({ word: 'abyss', answers: [] }), (e) => e.code === 'sessionOutOfOrder');
+  await assert.rejects(session.skip('abyss', 0), (e) => e.code === 'sessionOutOfOrder');
+  assert.throws(() => session.advance(), (e) => e.code === 'sessionOutOfOrder');
 });
 
 test('答错词、越界义项或坏 body 都会被拒', async () => {
   const { session } = setup();
   await learn(session);
-  await assert.rejects(session.answer({ word: 'bump', answers: [] }), (e) => e.code === 'examOutOfOrder');
+  await assert.rejects(session.answer({ word: 'bump', answers: [] }), (e) => e.code === 'sessionOutOfOrder');
   await assert.rejects(
     session.answer({ word: 'abyss', answers: [{ sense: 3, definition: 'x' }] }),
     (e) => e.code === 'badSense',
@@ -410,7 +410,7 @@ test('答错词、越界义项或坏 body 都会被拒', async () => {
 test('reveal 给整词已判完的义项，一条都没判完时锁着', async () => {
   const { session } = table(MULTI, { verdicts: [pass, fail, fail, fail] });
   await learn(session);
-  await assert.rejects(session.reveal('angle'), (e) => e.code === 'examLocked');
+  await assert.rejects(session.reveal('angle'), (e) => e.code === 'nothingResolved');
 
   await submit(session, { 1: '' });
   assert.deepEqual(await session.reveal('angle'), {
@@ -449,7 +449,7 @@ test('「下一个词」在义项还悬着时被拒', async () => {
   const { session } = setup({ verdicts: [fail, pass] });
   await learn(session);
   await submit(session);
-  assert.throws(() => session.advance(), (e) => e.code === 'examOpen');
+  assert.throws(() => session.advance(), (e) => e.code === 'sensesPending');
   assert.equal(session.current().word, 'abyss');
 
   await submit(session);
@@ -513,7 +513,7 @@ test('commit 一次写盘并结算', async () => {
   assert.equal(lines[12], '  - [x] #B2 - raised area - There is a bump on the road.');
   assert.deepEqual(fs.readdirSync(backupDir).filter((n) => n.startsWith('Vocabulary.')), [res.backup]);
   assert.equal(session.status().status, 'settled');
-  await assert.rejects(session.commit(), (e) => e.code === 'examSettled');
+  await assert.rejects(session.commit(), (e) => e.code === 'sessionSettled');
 });
 
 test('中途被删的词结算时跳过，不卡写盘', async () => {
@@ -595,7 +595,7 @@ test('v3 的状态文件被当作没有轮次', async () => {
   });
   const reopened = make();
   assert.equal(reopened.status(), null);
-  await assert.rejects(reopened.commit(), (e) => e.code === 'examNotRunning');
+  await assert.rejects(reopened.commit(), (e) => e.code === 'sessionNotRunning');
   await reopened.start({ mode: 'review' });
   assert.equal(reopened.current().word, 'absorb');
 });
@@ -604,7 +604,7 @@ test('已经答过题了再开一轮需要 force', async () => {
   const { session } = setup({ verdicts: [pass] });
   await learn(session);
   await finishCard(session);
-  await assert.rejects(session.start({ mode: 'review' }), (e) => e.code === 'examRunning');
+  await assert.rejects(session.start({ mode: 'review' }), (e) => e.code === 'sessionRunning');
   await session.start({ mode: 'review', force: true });
   assert.equal(session.current().word, 'absorb');
   assert.deepEqual(session.status().records, {});
@@ -614,7 +614,7 @@ test('只看过词没答题的重开也要 force', async () => {
   const { session } = setup();
   await session.start({ mode: 'learn' });
   session.nextStudy();
-  await assert.rejects(session.start({ mode: 'learn' }), (e) => e.code === 'examRunning');
+  await assert.rejects(session.start({ mode: 'learn' }), (e) => e.code === 'sessionRunning');
   await session.start({ mode: 'learn', force: true });
   assert.equal(session.study().word, 'abyss');
 });
@@ -655,10 +655,10 @@ test('「不会」把一条义项记成不会，不花调用', async () => {
 test('「不会」乱序、越界或重复都拒', async () => {
   const { session } = setup();
   await learn(session);
-  await assert.rejects(session.skip('bump', 0), (e) => e.code === 'examOutOfOrder');
+  await assert.rejects(session.skip('bump', 0), (e) => e.code === 'sessionOutOfOrder');
   await assert.rejects(session.skip('abyss', 2), (e) => e.code === 'badSense');
   await session.skip('abyss', 0);
-  await assert.rejects(session.skip('abyss', 0), (e) => e.code === 'examDone');
+  await assert.rejects(session.skip('abyss', 0), (e) => e.code === 'senseResolved');
   assert.equal(session.current().word, 'abyss');
   const moved = session.advance();
   assert.equal(moved.cursor, 1);
@@ -738,8 +738,8 @@ test('暂停与继续在看词段也能用', async () => {
   assert.equal(session.status().phase, 'study');
   assert.equal(session.study(), null);
   assert.deepEqual(fs.readFileSync(file), before);
-  assert.throws(() => session.nextStudy(), (e) => e.code === 'examPaused');
-  await assert.rejects(session.commit(), (e) => e.code === 'examPaused');
+  assert.throws(() => session.nextStudy(), (e) => e.code === 'sessionPaused');
+  await assert.rejects(session.commit(), (e) => e.code === 'sessionPaused');
 
   const resumed = session.resume();
   assert.equal(resumed.phase, 'study');
@@ -752,7 +752,7 @@ test('暂停且有进度时重开需要 force', async () => {
   await learn(session);
   await finishCard(session);
   await session.pause();
-  await assert.rejects(session.start({ mode: 'learn' }), (e) => e.code === 'examRunning');
+  await assert.rejects(session.start({ mode: 'learn' }), (e) => e.code === 'sessionRunning');
   await session.start({ mode: 'learn', force: true });
   assert.equal(session.status().status, 'running');
   assert.equal(session.status().phase, 'study');
@@ -795,5 +795,5 @@ test('setLang 切换本轮语言并落盘', async () => {
   assert.equal(session.setLang('zh').lang, 'zh');
 
   const other = setup();
-  assert.throws(() => other.session.setLang('en'), (e) => e.code === 'examNotRunning');
+  assert.throws(() => other.session.setLang('en'), (e) => e.code === 'sessionNotRunning');
 });

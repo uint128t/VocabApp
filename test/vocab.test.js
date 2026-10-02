@@ -12,7 +12,6 @@ import {
   planSetChecked,
   planSetSensesChecked,
   planSetEntry,
-  planSetSenses,
   planDeleteEntry,
   applyEdits,
 } from '../vocab.js';
@@ -544,31 +543,6 @@ test('planSetEntry on the real file changes exactly one line', () => {
   assert.equal(changed[0], target.senses[0].index);
   assert.ok(b[changed[0]].endsWith('Absorb the details before deciding.'));
   assert.equal(parse(out).errors.length, 0);
-});
-
-test('planSetSenses rewrites the whole block and keeps each checkbox', () => {
-  const t = fx(['### A', '', '- angle', '  - [x] #A2 - the space between two lines - The angle was 45 degrees.', '']);
-  const added = planSetSenses(t, 'angle', [
-    { level: 'A2', definition: 'the space between two lines', example: 'The angle was 45 degrees.' },
-    { level: 'C1', definition: 'to fish', example: 'He angled his line carefully.' },
-  ]);
-  assert.equal(added.error, undefined);
-  assert.deepEqual(ls(applyEdits(t, added.edits)), [
-    '### A',
-    '',
-    '- angle',
-    '  - [x] #A2 - the space between two lines - The angle was 45 degrees.',
-    '  - [x] #C1 - to fish - He angled his line carefully.',
-    '',
-  ]);
-  const fewer = planSetSenses(t, 'angle', [{ level: 'A1', definition: 'sharp corner', example: 'The angle was sharp.' }]);
-  const out = applyEdits(t, fewer.edits);
-  assert.equal(out.includes('C1'), false);
-  assert.equal(out.includes('  - [x] #A1 - sharp corner - The angle was sharp.'), true);
-  assert.ok(planSetSenses(t, 'angle', []).error);
-  assert.ok(planSetSenses(t, 'angle', [{ level: 'B7', definition: 'x', example: 'X.' }]).error);
-  assert.ok(planSetSenses(t, 'angle', [{ level: 'B1', definition: 'x', example: '  ' }]).error);
-  assert.ok(planSetSenses(t, 'angle', [{ level: 'B1', example: 'X.' }]).error, '义项必须有释义');
 });
 
 test('planDeleteEntry removes the head and every sense line', () => {

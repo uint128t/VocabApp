@@ -12,7 +12,6 @@ import {
   planInsertEntry,
   planSetChecked,
   planSetEntry,
-  planSetSenses,
   planSetSensesChecked,
   wordProblem,
 } from './vocab.js';
@@ -32,8 +31,6 @@ const MIME = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
 };
 const BODY_LIMIT = 1_000_000;
 // 档位复判一轮问几次：并行问三次取平均。多问几次只是压单次判断的偶然性，三次够用，
@@ -46,16 +43,16 @@ const PLAN_STATUS = {
   wordNotFound: 404,
 };
 const SESSION_STATUS = {
-  examNotRunning: 409,
-  examRunning: 409,
-  examOutOfOrder: 409,
-  examFinished: 409,
-  examSettled: 409,
-  examLocked: 409,
-  examPaused: 409,
-  examNotPaused: 409,
-  examOpen: 409,
-  examDone: 409,
+  sessionNotRunning: 409,
+  sessionRunning: 409,
+  sessionOutOfOrder: 409,
+  sessionQueueFinished: 409,
+  sessionSettled: 409,
+  nothingResolved: 409,
+  sessionPaused: 409,
+  sessionNotPaused: 409,
+  sensesPending: 409,
+  senseResolved: 409,
   emptyScope: 400,
   badMode: 400,
   badCount: 400,
@@ -297,8 +294,6 @@ export function createApp({ store, config, ai, settingsStore, cefr, internalVoca
         body: text,
       };
     },
-
-    '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
 
     // 设备迁移（D46）：导出**一份完整的设备包**——密钥 + 设置 + 整份词表（D50 起词表在这里拼，
     // 前端只管把这份文件交出去：手机上要交给系统分享，而那边没有插件桥，只能让桥页自己来取，
@@ -611,26 +606,6 @@ export function createApp({ store, config, ai, settingsStore, cefr, internalVoca
         const next = applyEdits(text, plan.edits);
         const { backup } = store.writeWithBackup(next);
         return { status: 200, body: { word, removed: plan.removed, stats: parse(next).stats, backup } };
-      });
-    },
-
-
-
-    '/api/commit-senses': async (req) => {
-      const body = await readJson(req);
-      const word = readWord(body);
-      const senses = Array.isArray(body.senses) ? body.senses : null;
-      if (!senses) throw httpError(400, 'badSenses', 'senses 必须是数组');
-      return store.enqueue(async () => {
-        const text = store.readFile();
-        const plan = planSetSenses(text, word, senses);
-        if (plan.error) {
-          throw httpError(PLAN_STATUS[plan.error.code] || 400, plan.error.code, plan.error.message, plan.error.details);
-        }
-        const next = applyEdits(text, plan.edits);
-        const { backup } = store.writeWithBackup(next);
-        const after = parse(next).entries.find((e) => e.word === word);
-        return { status: 200, body: { entry: project(after), backup } };
       });
     },
 

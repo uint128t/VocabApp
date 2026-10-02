@@ -94,6 +94,17 @@ async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {}, inte
   };
 }
 
+// 备份目录里有哪几份，测试直接看文件系统：以前这借 GET /api/backups 来查，而那个接口前端
+// 一个调用方都没有——写盘留没留备份，本来用不着走一趟 HTTP 才知道。
+const backupNames = (dir) => {
+  const box = path.join(dir, 'backups');
+  if (!fs.existsSync(box)) return [];
+  return fs
+    .readdirSync(box)
+    .filter((n) => n.startsWith('Vocabulary.') && n.endsWith('.md'))
+    .sort();
+};
+
 test('GET /api/entries returns projected entries and stats', async () => {
   const { base } = await start();
   const res = await fetch(`${base}/api/entries`);
@@ -150,15 +161,6 @@ test('GET /api/settings lists models and the vocab path and never leaks the key'
   assert.match(body.settings.vocabFile, /Vocabulary\.md$/);
   assert.ok(!/sk-/.test(text));
   assert.ok(!text.includes('apiKey'));
-});
-
-test('GET /api/backups lists the backup directory', async () => {
-  const { base, store } = await start();
-  assert.deepEqual((await (await fetch(`${base}/api/backups`)).json()).files, []);
-  store.writeWithBackup('### A\n\n- [x] absorb - take in\n');
-  const body = await (await fetch(`${base}/api/backups`)).json();
-  assert.equal(body.files.length, 1);
-  assert.match(body.files[0].name, /^Vocabulary\./);
 });
 
 test('static assets are served without caching', async () => {
@@ -346,7 +348,7 @@ test('POST /api/draft maps model failures to 502 and missing config to 503', asy
 });
 
 test('POST /api/commit-add writes the entry at the sorted position', async () => {
-  const { base, file } = await start(SORT_FIXTURE);
+  const { base, file, dir } = await start(SORT_FIXTURE);
   const res = await post(base, '/api/commit-add', { word: 'attic', ...DRAFT });
   assert.equal(res.status, 200);
   assert.equal(res.body.entry.chapter, 'A');
@@ -364,20 +366,18 @@ test('POST /api/commit-add writes the entry at the sorted position', async () =>
     '  - [x] #B1 - real - The painting is authentic.',
     '',
   ]);
-  const backups = await (await fetch(`${base}/api/backups`)).json();
-  assert.equal(backups.files[0].name, res.body.backup);
+  assert.deepEqual(backupNames(dir), [res.body.backup]);
   assert.equal((await (await fetch(`${base}/api/entries`)).json()).stats.total, 3);
 });
 
 test('POST /api/commit-add refuses a duplicate word without touching the file', async () => {
-  const { base, file } = await start(SORT_FIXTURE);
+  const { base, file, dir } = await start(SORT_FIXTURE);
   const before = fs.readFileSync(file);
   const res = await post(base, '/api/commit-add', { word: 'Attentive', ...DRAFT });
   assert.equal(res.status, 409);
   assert.equal(res.body.error.code, 'wordExists');
   assert.deepEqual(fs.readFileSync(file), before);
-  const backups = await (await fetch(`${base}/api/backups`)).json();
-  assert.deepEqual(backups.files, []);
+  assert.deepEqual(backupNames(dir), []);
 });
 
 test('POST /api/commit-add refuses invalid fields without touching the file', async () => {
@@ -485,7 +485,7 @@ test('POST /api/judge grades a named sense and reports its own checkbox', async 
 
 test('POST /api/judge leaves the file untouched on FAIL', async () => {
   const ai = fakeAi({ verdict: { pass: false, reason: '例句没用对该词', suggestion: '再造一句' } });
-  const { base, file } = await start(QUIZ_FIXTURE, { ai });
+  const { base, file, dir } = await start(QUIZ_FIXTURE, { ai });
   const before = fs.readFileSync(file);
   const res = await post(base, '/api/judge', {
     word: 'absorb',
@@ -497,7 +497,7 @@ test('POST /api/judge leaves the file untouched on FAIL', async () => {
   assert.equal(res.body.checked, false);
   assert.equal(res.body.backup, null);
   assert.deepEqual(fs.readFileSync(file), before);
-  assert.deepEqual((await (await fetch(`${base}/api/backups`)).json()).files, []);
+  assert.deepEqual(backupNames(dir), []);
 });
 
 test('POST /api/judge forwards the feedback language and falls back to Chinese', async () => {
@@ -550,8 +550,6 @@ test('POST /api/set-checked reverts the box and touches nothing else', async () 
   assert.equal((await post(base, '/api/set-checked', { word: 'absorb', sense: 3, checked: true })).status, 400);
   assert.equal((await post(base, '/api/set-checked', { word: 'nosuch', checked: true })).status, 404);
 });
-
-
 
 
 
@@ -677,7 +675,7 @@ test('POST /api/commit-edit rewrites the head and child lines', async () => {
 });
 
 test('POST /api/commit-edit reports noop without writing', async () => {
-  const { base, file } = await start(EDIT_FIXTURE);
+  const { base, file, dir } = await start(EDIT_FIXTURE);
   const before = fs.readFileSync(file);
   const res = await post(base, '/api/commit-edit', {
     word: 'absorb',
@@ -689,7 +687,7 @@ test('POST /api/commit-edit reports noop without writing', async () => {
   assert.equal(res.body.noop, true);
   assert.equal(res.body.backup, null);
   assert.deepEqual(fs.readFileSync(file), before);
-  assert.deepEqual((await (await fetch(`${base}/api/backups`)).json()).files, []);
+  assert.deepEqual(backupNames(dir), []);
 });
 
 test('POST /api/commit-edit keeps chinese unless told to drop it', async () => {
@@ -764,14 +762,14 @@ test('POST /api/commit-delete drops a head that has no sense line', async () => 
 });
 
 test('POST /api/commit-delete rejects unknown words and dirty files without writing', async () => {
-  const { base, file } = await start(DELETE_FIXTURE);
+  const { base, file, dir } = await start(DELETE_FIXTURE);
   const before = fs.readFileSync(file);
   const missing = await post(base, '/api/commit-delete', { word: 'nope' });
   assert.equal(missing.status, 404);
   assert.equal(missing.body.error.code, 'wordNotFound');
   assert.equal((await post(base, '/api/commit-delete', {})).status, 400);
   assert.deepEqual(fs.readFileSync(file), before);
-  assert.deepEqual((await (await fetch(`${base}/api/backups`)).json()).files, []);
+  assert.deepEqual(backupNames(dir), []);
 
   const dirty = await start('### A\n\n- [x] absorb - take in\n\n### B\n\n- [ ] absorb - soak up\n');
   const blocked = await post(dirty.base, '/api/commit-delete', { word: 'absorb' });
@@ -809,11 +807,11 @@ test('a review round draws mastered words, judges them and settles in one write'
 
   const outOfOrder = await post(base, '/api/session/answer', { word: 'abyss', answers: [] });
   assert.equal(outOfOrder.status, 409);
-  assert.equal(outOfOrder.body.error.code, 'examOutOfOrder');
+  assert.equal(outOfOrder.body.error.code, 'sessionOutOfOrder');
 
   const locked = await post(base, '/api/session/reveal', { word: 'absorb' });
   assert.equal(locked.status, 409);
-  assert.equal(locked.body.error.code, 'examLocked');
+  assert.equal(locked.body.error.code, 'nothingResolved');
 
   const skipped = await post(base, '/api/session/skip', { word: 'absorb', sense: 0 });
   assert.equal(skipped.status, 200);
@@ -853,7 +851,7 @@ test('a review round draws mastered words, judges them and settles in one write'
 
   const again = await post(base, '/api/session/commit', {});
   assert.equal(again.status, 409);
-  assert.equal(again.body.error.code, 'examSettled');
+  assert.equal(again.body.error.code, 'sessionSettled');
 });
 
 test('a learn round walks the study phase before the test phase', async () => {
@@ -883,7 +881,7 @@ test('a learn round walks the study phase before the test phase', async () => {
 
   const tooEarly = await post(base, '/api/session/answer', { word: 'abyss', answers: [] });
   assert.equal(tooEarly.status, 409);
-  assert.equal(tooEarly.body.error.code, 'examOutOfOrder');
+  assert.equal(tooEarly.body.error.code, 'sessionOutOfOrder');
 
   const next = await post(base, '/api/session/study/next', {});
   assert.equal(next.status, 200);
@@ -903,7 +901,7 @@ test('a learn round walks the study phase before the test phase', async () => {
   // 例句跟着进 prompt；闭卷的敏感词用表内释义，但表内释义本身不发出去。
   assert.equal(ai.judged[0].userExample, 'The ship fell into the abyss.');
   assert.equal(ai.judged[0].storedDefinition, undefined);
-  assert.equal(ai.judgedOpts[0].exam, true);
+  assert.equal(ai.judgedOpts[0].closedBook, true);
   assert.deepEqual(ai.judgedOpts[0].guard, { definitions: ['deep hole'], chinese: [] });
   const revealed = await post(base, '/api/session/reveal', { word: 'abyss' });
   assert.equal(revealed.body.senses[0].suggestion, '方向对，再想具体一点');
@@ -942,7 +940,7 @@ test('session start and answer validate their input', async () => {
 
   const wrongWord = await post(base, '/api/session/answer', { word: 'nope', answers: [] });
   assert.equal(wrongWord.status, 409);
-  assert.equal(wrongWord.body.error.code, 'examOutOfOrder');
+  assert.equal(wrongWord.body.error.code, 'sessionOutOfOrder');
 
   const gone = await post(base, '/api/session/reveal', { word: 'nope' });
   assert.equal(gone.status, 404);
@@ -978,7 +976,7 @@ test('session pause and resume keep the round', async () => {
   const frozen = fs.readFileSync(file);
   const blocked = await post(base, '/api/session/answer', { word: 'absorb', answers: [] });
   assert.equal(blocked.status, 409);
-  assert.equal(blocked.body.error.code, 'examPaused');
+  assert.equal(blocked.body.error.code, 'sessionPaused');
   assert.equal((await post(base, '/api/session/pause', {})).status, 409);
   assert.equal((await post(base, '/api/session/commit', {})).status, 409);
   assert.deepEqual(fs.readFileSync(file), frozen);
@@ -992,7 +990,7 @@ test('session pause and resume keep the round', async () => {
   assert.equal(resumed.body.state.status, 'running');
   assert.equal(resumed.body.current.word, 'absorb');
   assert.equal((await post(base, '/api/session/resume', {})).status, 409);
-  assert.equal((await post(base, '/api/session/resume', {})).body.error.code, 'examNotPaused');
+  assert.equal((await post(base, '/api/session/resume', {})).body.error.code, 'sessionNotPaused');
 });
 
 test('session routes report 503 when no model is configured', async () => {
@@ -1053,8 +1051,6 @@ const CEFR_FIXTURE =
 
 
 
-
-
 const SENSE_FIXTURE =
   '### A\n\n- angle\n  - [x] #A2 - the space between two lines - The angle was 45 degrees.\n';
 const MULTI_FIXTURE =
@@ -1080,48 +1076,6 @@ test('GET /api/entries exposes every sense with its own level and checkbox', asy
   assert.deepEqual(after.stats.senses, { total: 2, checked: 1, unchecked: 1 });
   assert.equal(after.stats.full, 0);
   assert.equal(after.stats.partial, 1);
-});
-
-test('POST /api/commit-senses keeps each sense checkbox and boxes multi-sense lines', async () => {
-  const { base, file } = await start(SENSE_FIXTURE);
-  const res = await post(base, '/api/commit-senses', {
-    word: 'angle',
-    senses: [
-      { level: 'A2', definition: 'the space between two lines', example: 'The angle was 45 degrees.' },
-      { level: 'C1', definition: 'to fish', example: 'He angled his line carefully.' },
-    ],
-  });
-  assert.equal(res.status, 200);
-  assert.equal(res.body.entry.senses.length, 2);
-  assert.deepEqual(res.body.entry.senses[1], {
-    level: 'C1',
-    definition: 'to fish',
-    chinese: null,
-    example: 'He angled his line carefully.',
-    checked: true,
-  });
-  assert.match(res.body.backup, /^Vocabulary\./);
-  assert.deepEqual(fs.readFileSync(file, 'utf8').split('\n'), [
-    '### A',
-    '',
-    '- angle',
-    '  - [x] #A2 - the space between two lines - The angle was 45 degrees.',
-    '  - [x] #C1 - to fish - He angled his line carefully.',
-    '',
-  ]);
-});
-
-test('POST /api/commit-senses validates its payload and never writes garbage', async () => {
-  const { base, file } = await start(SENSE_FIXTURE);
-  const before = fs.readFileSync(file);
-  assert.equal((await post(base, '/api/commit-senses', { word: 'angle', senses: [] })).status, 400);
-  assert.equal((await post(base, '/api/commit-senses', { word: 'angle' })).status, 400);
-  assert.equal((await post(base, '/api/commit-senses', { word: 'angle', senses: [{ level: 'B7', definition: 'x', example: 'X.' }] })).status, 400);
-  assert.equal((await post(base, '/api/commit-senses', { word: 'angle', senses: [{ level: 'B1', example: 'X.' }] })).status, 400, '义项必须有释义');
-  assert.equal((await post(base, '/api/commit-senses', { word: 'angle', senses: [{ level: 'B1', definition: 'x', example: '   ' }] })).status, 400);
-  assert.equal((await post(base, '/api/commit-senses', { word: 'nope', senses: [{ level: 'B1', definition: 'x', example: 'X.' }] })).status, 404);
-  assert.deepEqual(fs.readFileSync(file), before);
-  assert.deepEqual((await (await fetch(`${base}/api/backups`)).json()).files, []);
 });
 
 test('POST /api/commit-add writes a bare head with one line per sense', async () => {
@@ -1730,7 +1684,6 @@ test('isLoopbackRequest 只认本机地址（迁移导出与文件对话框的�
   }
   assert.equal(isLoopbackRequest(undefined), false, '没有 req 也当作不是本机');
 });
-
 
 
 test('use-file：把词表切到任意已有文件并原地读写；空文件写入；坏文件拒收', async () => {

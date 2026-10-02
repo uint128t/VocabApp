@@ -61,14 +61,14 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
 
   const mustState = () => {
     const state = load();
-    if (!state) throw err('examNotRunning', '当前没有进行中的轮次');
+    if (!state) throw err('sessionNotRunning', '当前没有进行中的轮次');
     return state;
   };
 
   const running = () => {
     const state = mustState();
-    if (state.status === 'paused') throw err('examPaused', '本轮已暂停，点「继续本轮」接着考');
-    if (state.status !== 'running') throw err('examSettled', '本轮已经结算或放弃');
+    if (state.status === 'paused') throw err('sessionPaused', '本轮已暂停，点「继续本轮」接着考');
+    if (state.status !== 'running') throw err('sessionSettled', '本轮已经结算或放弃');
     return state;
   };
 
@@ -175,7 +175,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
       previous && (previous.status === 'running' || previous.status === 'paused') &&
       (previous.cursor > 0 || previous.studyCursor > 0 || Object.keys(previous.records).length > 0);
     if (touched && !scope.force) {
-      throw err('examRunning', '已有轮次进行中，需要先结算、放弃，或明确重开');
+      throw err('sessionRunning', '已有轮次进行中，需要先结算、放弃，或明确重开');
     }
 
     // 词级抽词，抽中后这个词的全部义项都进队列。
@@ -210,7 +210,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
   // 看词段翻到下一个词；看完最后一个自动进测试段。
   function nextStudy() {
     const state = running();
-    if (state.phase !== 'study') throw err('examOutOfOrder', '本轮没有看词这一段');
+    if (state.phase !== 'study') throw err('sessionOutOfOrder', '本轮没有看词这一段');
     const byWord = wordIndex();
     let next = studyIndex(state, byWord) + 1;
     while (next < state.queue.length && !byWord.has(state.queue[next].word)) next += 1;
@@ -223,14 +223,14 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
   // 交一整张卡：answers 里给了释义的逐条判，没给到的（留空）按「不会」记账。
   async function answer({ word, answers, lang }) {
     const state = running();
-    if (state.phase !== 'test') throw err('examOutOfOrder', '先把这一轮要看的词看完，再开始测试');
+    if (state.phase !== 'test') throw err('sessionOutOfOrder', '先把这一轮要看的词看完，再开始测试');
     if (lang === 'zh' || lang === 'en') state.lang = lang;
     const byWord = wordIndex();
     const i = openIndex(state, byWord);
-    if (i >= state.queue.length) throw err('examFinished', '所有词都已作答，请结算或放弃');
+    if (i >= state.queue.length) throw err('sessionQueueFinished', '所有词都已作答，请结算或放弃');
     const item = state.queue[i];
     if ((typeof word === 'string' ? word.trim() : '') !== item.word) {
-      throw err('examOutOfOrder', `当前应该答：${item.word}`);
+      throw err('sessionOutOfOrder', `当前应该答：${item.word}`);
     }
     if (!Array.isArray(answers)) throw err('badAnswers', 'answers 必须是数组');
     const entry = byWord.get(item.word);
@@ -277,7 +277,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
             userExample: answer.example,
             targetExample: entry.senses[sense] ? entry.senses[sense].example : '',
           },
-          { model: state.model, lang: state.lang, exam: true, guard },
+          { model: state.model, lang: state.lang, closedBook: true, guard },
         );
         rec.attempts.push({
           userDefinition: answer.definition,
@@ -320,19 +320,19 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
   // 「不会」走 skip：这条义项直接算不会，不花模型调用。
   async function skip(word, sense) {
     const state = running();
-    if (state.phase !== 'test') throw err('examOutOfOrder', '先把这一轮要看的词看完，再开始测试');
+    if (state.phase !== 'test') throw err('sessionOutOfOrder', '先把这一轮要看的词看完，再开始测试');
     const byWord = wordIndex();
     const i = openIndex(state, byWord);
-    if (i >= state.queue.length) throw err('examFinished', '所有词都已作答，请结算或放弃');
+    if (i >= state.queue.length) throw err('sessionQueueFinished', '所有词都已作答，请结算或放弃');
     const item = state.queue[i];
     if ((typeof word === 'string' ? word.trim() : '') !== item.word) {
-      throw err('examOutOfOrder', `当前应该答：${item.word}`);
+      throw err('sessionOutOfOrder', `当前应该答：${item.word}`);
     }
     const index = Number.isInteger(sense) ? sense : 0;
     if (!item.senses.includes(index)) throw err('badSense', `义项序号不在本轮范围：${index}`);
     const key = keyOf(item.word, index);
     const rec = state.records[key] ?? { attempts: [], result: null };
-    if (rec.result) throw err('examDone', '这条义项已经判完了');
+    if (rec.result) throw err('senseResolved', '这条义项已经判完了');
     rec.result = 'fail';
     rec.via = 'skip';
     state.records[key] = rec;
@@ -354,11 +354,11 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
   // 整张卡判完了才允许翻页（没判完的义项留在卡上）。
   function advance() {
     const state = running();
-    if (state.phase !== 'test') throw err('examOutOfOrder', '先把这一轮要看的词看完，再开始测试');
+    if (state.phase !== 'test') throw err('sessionOutOfOrder', '先把这一轮要看的词看完，再开始测试');
     const byWord = wordIndex();
     const i = openIndex(state, byWord);
     if (i < state.queue.length && !cardOf(state.queue[i], state, byWord).done) {
-      throw err('examOpen', '这个词还有义项没判完，判完或标「不会」再往下走');
+      throw err('sensesPending', '这个词还有义项没判完，判完或标「不会」再往下走');
     }
     state.cursor = i + 1;
     save(state);
@@ -392,7 +392,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
         example: sense.example,
       });
     });
-    if (!senses.length) throw err('examLocked', '这个词还没有判完的义项，暂时不能看表内释义与例句');
+    if (!senses.length) throw err('nothingResolved', '这个词还没有判完的义项，暂时不能看表内释义与例句');
     return { word, senses };
   }
 
@@ -483,7 +483,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
 
   function setLang(lang) {
     const state = mustState();
-    if (state.status !== 'running' && state.status !== 'paused') throw err('examSettled', '本轮已经结算或放弃');
+    if (state.status !== 'running' && state.status !== 'paused') throw err('sessionSettled', '本轮已经结算或放弃');
     if (lang !== 'zh' && lang !== 'en') throw err('badLang', '反馈语言只能是 zh 或 en');
     state.lang = lang;
     save(state);
@@ -499,7 +499,7 @@ export function createSession({ store, ai, stateFile, random = Math.random }) {
 
   function resume() {
     const state = mustState();
-    if (state.status !== 'paused') throw err('examNotPaused', '没有暂停中的轮次');
+    if (state.status !== 'paused') throw err('sessionNotPaused', '没有暂停中的轮次');
     state.status = 'running';
     save(state);
     return {

@@ -92,20 +92,6 @@ test('rotation is configurable', () => {
   assert.equal(fs.readdirSync(backupDir).filter((n) => AUTO_BACKUP.test(n)).length, 3);
 });
 
-test('listBackups returns newest first with sizes', () => {
-  const { store, backupDir } = setup();
-  fs.mkdirSync(backupDir, { recursive: true });
-  const seeded = `Vocabulary.${stamp(120)}.md`;
-  fs.writeFileSync(path.join(backupDir, seeded), 'aaa');
-  const res = store.writeWithBackup(NEW);
-  const files = store.listBackups();
-  assert.equal(files.length, 2);
-  assert.equal(files[0].name, res.backup);
-  assert.equal(files[1].name, seeded);
-  assert.equal(files[1].size, 3);
-  for (const f of files) assert.equal(typeof f.mtime, 'number');
-});
-
 test('enqueue runs one task at a time', async () => {
   const { store } = setup();
   const log = [];

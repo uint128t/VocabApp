@@ -498,14 +498,14 @@ test('judgeEntry grades against the use the target sentence shows', async () => 
   await plain.ai.judgeEntry({ word: 'angle', userDefinition: 'to fish', userExample: '' });
   assert.ok(!userOf(plain.calls).includes('as used here'), userOf(plain.calls));
 
-  const exam = harness({ responses: [ok('{"pass":true,"reason":"ok"}')] });
-  const verdict = await exam.ai.judgeEntry(
+  const closed = harness({ responses: [ok('{"pass":true,"reason":"ok"}')] });
+  const verdict = await closed.ai.judgeEntry(
     { word: 'angle', userDefinition: 'to fish', userExample: '', storedDefinition: 'to fish', targetExample: 'He angled his line carefully.' },
-    { exam: true },
+    { closedBook: true },
   );
   assert.equal(verdict.reason, 'ok');
-  assert.match(userOf(exam.calls), /as used here: He angled his line carefully\./);
-  assert.ok(!userOf(exam.calls).includes('stored definition'), userOf(exam.calls));
+  assert.match(userOf(closed.calls), /as used here: He angled his line carefully\./);
+  assert.ok(!userOf(closed.calls).includes('stored definition'), userOf(closed.calls));
 });
 
 test('exampleEntry generates one fresh sentence and validates it', async () => {
@@ -522,7 +522,7 @@ test('exampleEntry generates one fresh sentence and validates it', async () => {
   }
 });
 
-test('exam mode keeps a safe suggestion but retries a leaky one, then drops it', async () => {
+test('闭卷那一路留住安全的点评，说漏的重问、三次都不行就丢掉', async () => {
   const leaky = harness({
     responses: [
       ok('{"pass":false,"reason":"sense-off","suggestion":"这个词指 soak up 那种意思"}'),
@@ -532,7 +532,7 @@ test('exam mode keeps a safe suggestion but retries a leaky one, then drops it',
   });
   const verdict = await leaky.ai.judgeEntry(
     { word: 'absorb', userDefinition: 'give out', userExample: '' },
-    { exam: true, guard: { definitions: ['soak up'], chinese: [] } },
+    { closedBook: true, guard: { definitions: ['soak up'], chinese: [] } },
   );
   assert.deepEqual(verdict, { pass: false, reason: 'sense-off', suggestion: '你写的太宽了，再想想它具体指什么' });
   assert.equal(leaky.calls.length, 3);
@@ -552,7 +552,7 @@ test('a suggestion that leaks every time is dropped after three tries', async ()
   });
   const verdict = await leaky.ai.judgeEntry(
     { word: 'thorough', userDefinition: 'holistic', userExample: '' },
-    { exam: true, guard: { definitions: [], chinese: ['彻底', '详尽'] } },
+    { closedBook: true, guard: { definitions: [], chinese: ['彻底', '详尽'] } },
   );
   assert.equal(leaky.calls.length, 3);
   assert.deepEqual(verdict, { pass: false, reason: 'partial', suggestion: '' });
@@ -562,7 +562,7 @@ test('a suggestion that leaks every time is dropped after three tries', async ()
   // 模型自己选择不说，一次就收工。
   const silent = harness({ responses: [ok('{"pass":false,"reason":"sense-off"}')] });
   assert.deepEqual(
-    await silent.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { exam: true }),
+    await silent.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { closedBook: true }),
     { pass: false, reason: 'sense-off', suggestion: '' },
   );
   assert.equal(silent.calls.length, 1);
@@ -570,19 +570,19 @@ test('a suggestion that leaks every time is dropped after three tries', async ()
 
 test('reason stays a fixed code and unknown codes fall back to unspecified', async () => {
   const coded = harness({ responses: [ok('{"pass":false,"reason":"定义未能准确表达该词的核心含义。"}')] });
-  const verdict = await coded.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { exam: true });
+  const verdict = await coded.ai.judgeEntry({ word: 'thorough', userDefinition: 'holistic', userExample: '' }, { closedBook: true });
   assert.equal(verdict.reason, 'unspecified');
   assert.equal(verdict.pass, false);
 
   const okCase = harness({ responses: [ok('{"pass":true,"reason":"ok","suggestion":"例句自然。"}')] });
-  assert.equal((await okCase.ai.judgeEntry({ word: 'thorough', userDefinition: 'complete', userExample: 'A thorough check.' }, { exam: true })).reason, 'ok');
+  assert.equal((await okCase.ai.judgeEntry({ word: 'thorough', userDefinition: 'complete', userExample: 'A thorough check.' }, { closedBook: true })).reason, 'ok');
   assert.match(systemOf(coded.calls), /reason must be exactly one of/);
   assert.match(systemOf(coded.calls), /example-off/);
 });
 
 test('a closed-book verdict never carries the stored definition to the model', async () => {
-  const exam = harness({ responses: [ok('{"pass":true,"reason":"ok"}')] });
-  await exam.ai.judgeEntry(
+  const closed = harness({ responses: [ok('{"pass":true,"reason":"ok"}')] });
+  await closed.ai.judgeEntry(
     {
       word: 'attitude',
       userDefinition: 'a way of thinking',
@@ -590,12 +590,12 @@ test('a closed-book verdict never carries the stored definition to the model', a
       storedDefinition: 'how you feel about something',
       targetExample: 'Her attitude changed.',
     },
-    { exam: true, guard: { definitions: ['how you feel about something'], chinese: ['态度'] } },
+    { closedBook: true, guard: { definitions: ['how you feel about something'], chinese: ['态度'] } },
   );
-  assert.ok(!userOf(exam.calls).includes('stored definition'), userOf(exam.calls));
-  assert.ok(!userOf(exam.calls).includes('how you feel about something'), userOf(exam.calls));
-  assert.match(userOf(exam.calls), /learner definition: a way of thinking/);
-  assert.match(userOf(exam.calls), /as used here: Her attitude changed\./);
+  assert.ok(!userOf(closed.calls).includes('stored definition'), userOf(closed.calls));
+  assert.ok(!userOf(closed.calls).includes('how you feel about something'), userOf(closed.calls));
+  assert.match(userOf(closed.calls), /learner definition: a way of thinking/);
+  assert.match(userOf(closed.calls), /as used here: Her attitude changed\./);
 });
 
 test('a note the model itself flags as unsafe is rewritten in the same round', async () => {
@@ -608,7 +608,7 @@ test('a note the model itself flags as unsafe is rewritten in the same round', a
   });
   const verdict = await ai.judgeEntry(
     { word: 'absorb', userDefinition: 'give out' },
-    { exam: true, guard: { definitions: ['take in'], chinese: [] } },
+    { closedBook: true, guard: { definitions: ['take in'], chinese: [] } },
   );
   assert.deepEqual(verdict, { pass: false, reason: 'sense-off', suggestion: '你写得太宽了，再想具体一点' });
   assert.equal(calls.length, 2);

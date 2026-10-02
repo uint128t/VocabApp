@@ -82,18 +82,6 @@ export function createStore({ file, backupDir, maxBackups = 30, fs = realFs }) {
     return { backup };
   };
 
-  const listBackups = () => {
-    if (!fs.existsSync(backupDir)) return [];
-    return fs
-      .readdirSync(backupDir)
-      .filter((n) => n.startsWith('Vocabulary.') && n.endsWith('.md'))
-      .map((n) => {
-        const st = fs.statSync(path.join(backupDir, n));
-        return { name: n, size: st.size, mtime: st.mtimeMs };
-      })
-      .sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
-  };
-
   const enqueue = (task) => {
     const run = queue.then(() => task());
     queue = run.then(
@@ -119,5 +107,5 @@ export function createStore({ file, backupDir, maxBackups = 30, fs = realFs }) {
     return { entries, stats };
   };
 
-  return { target, readFile, writeWithBackup, listBackups, enqueue, selfCheck };
+  return { target, readFile, writeWithBackup, enqueue, selfCheck };
 }

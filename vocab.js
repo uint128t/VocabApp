@@ -452,35 +452,6 @@ export function planDeleteEntry(text, word) {
   };
 }
 
-export function planSetSenses(text, word, senses) {
-  const parsed = parse(text);
-  const blocked = guard(parsed);
-  if (blocked) return blocked;
-  const { entry, error } = findByWord(parsed, word);
-  if (error) return error;
-  if (!Array.isArray(senses) || senses.length === 0) return err('badSenses', '每个词至少保留一条义项');
-  const lines = [];
-  for (let i = 0; i < senses.length; i++) {
-    const sense = senses[i];
-    const bad = validateSense(sense);
-    if (bad) return bad;
-    lines.push(
-      serializeSense({
-        level: sense.level,
-        definition: String(sense.definition).trim(),
-        chinese: sense.chinese ? String(sense.chinese).trim() : null,
-        example: sense.example.trim(),
-        checked: checkedFor(sense, i, entry),
-      }),
-    );
-  }
-  const newText = lines.join('\n');
-  const edit = entry.childLines.length
-    ? { type: 'replace', lineStart: entry.lineStart + 1, lineEnd: entry.lineEnd, newText, word }
-    : { type: 'insertAfter', lineStart: entry.lineStart, lineEnd: entry.lineStart, newText, word };
-  return { edits: [edit], word, noop: false };
-}
-
 export function applyEdits(text, edits) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const lines = splitLines(text);

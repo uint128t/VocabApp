@@ -106,7 +106,7 @@ const JUDGE_RULES = [
   'The stored definition is only a reference and may be imperfect; judge mainly from your own knowledge of the word.',
 ];
 
-const EXAM_CODES = [
+const CLOSED_BOOK_CODES = [
   'ok',
   'sense-off',
   'partial',
@@ -117,9 +117,9 @@ const EXAM_CODES = [
   'unspecified',
 ];
 
-const EXAM_RULES = [
+const CLOSED_BOOK_RULES = [
   'This is a closed-book test: the learner must not be able to learn what the word means from your reply.',
-  `reason must be exactly one of these codes and nothing else: ${EXAM_CODES.join(', ')}.`,
+  `reason must be exactly one of these codes and nothing else: ${CLOSED_BOOK_CODES.join(', ')}.`,
   'Use sense-off when the definition misses the sense being asked about or is not English; partial when it is on the right track but does not pin the core sense down; wrong-pos when it is only a part-of-speech label; spelling when the word form is too misspelled to recognise; word-not-used when the submitted example does not actually use the word; example-off when the submitted example shows a different or unrelated meaning; unspecified when nothing else fits.',
   'suggestion is the only free text you may write: at most two short sentences, in the language asked for, on a single line without line breaks.',
   'suggestion speaks only about the learner\'s own answer and about how to check their thinking next time: what is too broad or too narrow in what they wrote, which part of the question to re-read, which step to try again. Quote their own words when that helps.',
@@ -194,9 +194,9 @@ export function leaksMeaning(note, guard, mine = '') {
 }
 
 // 说漏了再问一次时的追加要求；三轮都堵不住就只留代码。
-const EXAM_RETRY_NUDGE =
+const CLOSED_BOOK_NUDGE =
   'Your previous reply would have given the meaning away, so it was thrown away. Answer again with a suggestion that says nothing about what the word means, or with an empty suggestion.';
-const EXAM_TRIES = 3;
+const CLOSED_BOOK_TRIES = 3;
 
 function judgeInstructions(lang) {
   const feedback =
@@ -371,11 +371,11 @@ export function createAi({
     return { obj: parseJsonTolerant(second), content: second };
   }
 
-  async function judgeEntry({ word, userDefinition, userExample, storedDefinition, targetExample }, { model, lang, exam, guard } = {}) {
+  async function judgeEntry({ word, userDefinition, userExample, storedDefinition, targetExample }, { model, lang, closedBook, guard } = {}) {
     const example = typeof userExample === 'string' ? userExample.trim() : '';
     const parts = [system('judge', judgeInstructions(lang))];
     if (!example) parts.push(NO_EXAMPLE_NOTE);
-    if (exam) parts.push(EXAM_RULES.join(' '));
+    if (closedBook) parts.push(CLOSED_BOOK_RULES.join(' '));
     parts.push(CONTRACTS.judge);
 
     const asked = judgePrompt({
@@ -383,7 +383,7 @@ export function createAi({
       userDefinition,
       userExample: example,
       // 闭卷不把表内释义发给模型；它只作为本地兜底比对的敏感词。
-      storedDefinition: exam ? '' : storedDefinition,
+      storedDefinition: closedBook ? '' : storedDefinition,
       targetExample,
     });
 
@@ -391,10 +391,10 @@ export function createAi({
     // 问满三轮还漏就把点评丢掉，只留代码（代码本身永远不会泄密）。
     const text = (v) => (typeof v === 'string' ? v.trim() : '');
     let last = null;
-    for (let round = 0; round < (exam ? EXAM_TRIES : 1); round += 1) {
+    for (let round = 0; round < (closedBook ? CLOSED_BOOK_TRIES : 1); round += 1) {
       const messages = [
         { role: 'system', content: parts.join(' ') },
-        { role: 'user', content: round ? `${asked}\n${EXAM_RETRY_NUDGE}` : asked },
+        { role: 'user', content: round ? `${asked}\n${CLOSED_BOOK_NUDGE}` : asked },
       ];
       const { obj, content } = await askJson(messages, { model, maxTokens: MAX_TOKENS });
       if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
@@ -404,7 +404,7 @@ export function createAi({
       const pass = raw === true || raw === 'true' ? true : raw === false || raw === 'false' ? false : null;
       if (pass === null) throw aiError('aiField', `模型没有给出可用的 pass：${JSON.stringify(obj).slice(0, 200)}`);
 
-      if (!exam) return { pass, reason: text(obj.reason), suggestion: text(obj.suggestion) };
+      if (!closedBook) return { pass, reason: text(obj.reason), suggestion: text(obj.suggestion) };
 
       const code = text(obj.reason);
       const said = text(obj.suggestion);
@@ -413,10 +413,10 @@ export function createAi({
       const selfReported = obj.safe === false || obj.safe === 'false';
       const bad = leaksMeaning(said, guard, userDefinition);
       const suggestion = said && !selfReported && !bad ? said : '';
-      last = { pass, reason: EXAM_CODES.includes(code) ? code : 'unspecified', suggestion };
+      last = { pass, reason: CLOSED_BOOK_CODES.includes(code) ? code : 'unspecified', suggestion };
       // 没说、或说了但安全：收工。说了但漏了：换一轮再问。
       if (suggestion || !said) return last;
-      console.warn(`[ai] 闭卷点评疑似透露词义（${selfReported ? '模型自报' : '命中表内释义'}），重问（第 ${round + 1}/${EXAM_TRIES} 次）：${said.slice(0, 120)}`);
+      console.warn(`[ai] 闭卷点评疑似透露词义（${selfReported ? '模型自报' : '命中表内释义'}），重问（第 ${round + 1}/${CLOSED_BOOK_TRIES} 次）：${said.slice(0, 120)}`);
     }
     return last;
   }
