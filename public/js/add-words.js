@@ -34,7 +34,7 @@ function makeCard(word) {
   sensesBox.className = 'sense-list';
   const addSense = document.createElement('button');
   addSense.type = 'button';
-  addSense.className = 'skip-btn';
+  addSense.className = 'link-btn';
   addSense.textContent = '+ 添加义项';
   addSense.addEventListener('click', () => sensesBox.append(senseRow({ word }, { level: null, definition: '', example: '' })));
   const note = document.createElement('span');
@@ -221,6 +221,12 @@ async function commitCard(card, quiet) {
     return true;
   } catch (e) {
     a.write.disabled = false;
+    // 词已经在表里：把「定位到该条」亮出来，去那一行接着做，而不是再写一份重复的。
+    if (e.code === 'wordExists') {
+      a.locate.hidden = false;
+      a.status.textContent = e.message;
+      return e.message;
+    }
     a.status.textContent = `写入失败：${e.message}`;
     return `写入失败：${e.message}`;
   }
