@@ -226,7 +226,7 @@ function fakeAi({ throwError, verdict = { pass: true, reason: 'ok', suggestion: 
   const examples = [];
   const tested = [];
   const levelVotes = [];
-  // 五次并行调用按顺序取票，票用完了就用最后一票兜底。
+  // 三次并行调用按顺序取票，票用完了就用最后一票兜底。
   const queue = [...votes];
   return {
     seen,
@@ -1380,7 +1380,7 @@ test('POST /api/level/vote drops invalid votes and reports no votes at all', asy
   assert.deepEqual({ level: bad.body.results[0].level, valid: bad.body.results[0].valid }, { level: null, valid: 0 });
 });
 
-// 点「终止」= 关掉这条连接。服务端要把它变成信号往下传，让还在跑的五次投票一起停；
+// 点「终止」= 关掉这条连接。服务端要把它变成信号往下传，让还在跑的三次投票一起停；
 // 连接已经没了就别再写响应（写一个销毁了的 socket 会炸掉进程）。
 test('closing the connection aborts the running votes and writes nothing back', async () => {
   const signals = [];
