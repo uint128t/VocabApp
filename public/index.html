@@ -151,6 +151,14 @@
                   <button id="pickImportVocab" class="btn" type="button" hidden>选取词表并导入…</button>
                   <span id="pickHint" class="save-state" hidden></span>
                 </div>
+                <div class="row" id="externalRow" hidden>
+                  <button id="useExternal" class="btn" type="button">使用共享存储文件夹</button>
+                  <span id="externalState" class="save-state"></span>
+                </div>
+                <p class="hint" id="externalHint" hidden>
+                  切过去之后，词表存在手机的共享存储里（Documents/VocabApp/Vocabulary.md），
+                  Syncthing 之类的工具可以直接同步这个文件夹到电脑——不用再手动导入导出。
+                </p>
                 <p class="hint" id="vocabFileNote">
                   指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。
                 </p>

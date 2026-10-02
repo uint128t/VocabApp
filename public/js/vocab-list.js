@@ -86,7 +86,25 @@ function renderStats() {
     ovRow(`已掌握义项 ${n.checked} / ${n.total}`),
     ovBar([['', n.checked]], n.total),
   );
+  // 系统字体放大时（安卓实测 1.3×）5 个导航项加概览会挤不下：与其让顶部条内部横滚，
+  // 不如按实测溢出收起概览——和 ≤360px 的处理一致，只是由「真的放不下」驱动而不是断点。
+  syncNavFit();
 }
+
+function syncNavFit() {
+  const side = document.querySelector('.side');
+  if (!side) return;
+  const narrow = matchMedia('(max-width: 920px)').matches;
+  if (!narrow) {
+    document.documentElement.classList.remove('nav-compact');
+    return;
+  }
+  // 先清掉标记再量：量的是「概览还在时」的真实占用
+  document.documentElement.classList.remove('nav-compact');
+  if (side.scrollWidth > side.clientWidth + 1) document.documentElement.classList.add('nav-compact');
+}
+
+window.addEventListener('resize', syncNavFit);
 
 function editForm(entry, li) {
   const form = document.createElement('div');

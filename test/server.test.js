@@ -1632,3 +1632,48 @@ test('isLoopbackRequest 只认本机地址（迁移导出与文件对话框的�
   }
   assert.equal(isLoopbackRequest(undefined), false, '没有 req 也当作不是本机');
 });
+
+test('共享存储接口只在 VOCAB_MOBILE=1 的部署可用', async () => {
+  const { base } = await start();
+  const status = await fetch(`${base}/api/vocab/external-status?dir=${encodeURIComponent('/tmp/x')}`);
+  assert.equal(status.status, 501);
+  assert.equal((await post(base, '/api/vocab/use-external', { dir: '/tmp/x' })).status, 501);
+});
+
+test('共享存储：探写判定权限、复制词表并切路径、已有可解析的词表不覆盖', async () => {
+  process.env.VOCAB_MOBILE = '1';
+  try {
+    const { base, file, settings } = await start(SORT_FIXTURE);
+    const extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-ext-'));
+    const status = await (await fetch(`${base}/api/vocab/external-status?dir=${encodeURIComponent(extDir)}`)).json();
+    assert.equal(status.available, true, '可写目录应探写通过');
+
+    const res = await post(base, '/api/vocab/use-external', { dir: extDir });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.copied, true, '目标还没有词表：把当前这份复制过去');
+    const target = path.join(extDir, 'Vocabulary.md');
+    assert.equal(fs.readFileSync(target, 'utf8'), SORT_FIXTURE);
+    assert.equal(settings.get().settings.vocabFile, target, '切换后设置里的路径指向外部文件');
+    assert.ok(res.body.stats.total > 0);
+
+    // 外部已经有一份能解析的词表（比如 Syncthing 刚同步来的）：不覆盖，直接切过去用
+    const extern = '### Z\n\n- zebra\n  - [ ] #A1 - an animal - Zebras have stripes.\n';
+    fs.writeFileSync(target, extern);
+    // 先切回原来的词表，才能再走一次 use-external
+    settings.patch({ vocabFile: file });
+    const res2 = await post(base, '/api/vocab/use-external', { dir: extDir });
+    assert.equal(res2.status, 200);
+    assert.equal(res2.body.copied, false, '已有可解析的词表不该被覆盖');
+    assert.equal(fs.readFileSync(target, 'utf8'), extern);
+
+    // 不可写目录：externalDenied，且不切换
+    const before = settings.get().settings.vocabFile;
+    const bad = await post(base, '/api/vocab/use-external', { dir: path.join(extDir, 'Vocabulary.md', 'nested') });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.body.error.code, 'externalDenied');
+    assert.equal(settings.get().settings.vocabFile, before);
+    fs.rmSync(extDir, { recursive: true, force: true });
+  } finally {
+    delete process.env.VOCAB_MOBILE;
+  }
+});

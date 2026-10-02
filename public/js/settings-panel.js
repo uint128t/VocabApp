@@ -1,6 +1,6 @@
 // 设置面板与主题：模型候选、提示词、主题循环、打开配置文件、设备迁移。
 
-import { $, api, toast, fillSelect } from './core.js';
+import { $, api, toast, fillSelect, activateTab } from './core.js';
 import { initMigrate } from './migrate.js';
 
 function fillModelSelect(models, current) {
@@ -17,6 +17,9 @@ function fillModelSelect(models, current) {
 
 const THEME_KEY = 'vocab-theme';
 const THEME_LABEL = { auto: '跟随系统', light: '浅色', dark: '深色' };
+// 顶栏按钮用两字版：「跟随系统」比「浅色/深色」宽两个汉字，系统字体一放大就把顶栏顶出横向滚动
+// （用户实测：主题选跟随系统才会横向滚动）。设置页的下拉仍然写全「跟随系统」。
+const THEME_BTN_LABEL = { auto: '自动', light: '浅色', dark: '深色' };
 let settings = null;
 let availableModels = [];
 let keyNames = [];
@@ -46,7 +49,8 @@ function applyTheme(mode) {
     localStorage.setItem(THEME_KEY, mode);
   } catch {}
   document.documentElement.dataset.theme = resolvedTheme(mode);
-  $('#themeBtn').textContent = `主题·${THEME_LABEL[mode] || THEME_LABEL.auto}`;
+  $('#themeBtn').textContent = `主题·${THEME_BTN_LABEL[mode] || THEME_BTN_LABEL.auto}`;
+  $('#themeBtn').title = `切换深浅色（当前：${THEME_LABEL[mode] || THEME_LABEL.auto}）`;
 }
 
 function setSaveState(message, bad) {
@@ -177,6 +181,10 @@ async function loadSettings() {
       pickerMounted = true;
       mountVocabPicker({ platform, isLocal: Boolean(body.local), isMobile: Boolean(keysFile) });
     }
+    // 安卓 App：共享存储那一行（D48）。桥页跳回来时顺带自动完成切换
+    const isAndroidApp = platform === 'android' && Boolean(keysFile);
+    $('#externalRow').hidden = $('#externalHint').hidden = !isAndroidApp;
+    mountExternalStorage(isAndroidApp);
     // 移动版没有 .env，那段「密钥写在 .env 里」的说明换成沙盒口径，别让手机用户去找不存在的文件
     if (keysFile) {
       $('#modelHint').textContent =
@@ -378,6 +386,94 @@ function mountVocabPicker({ platform, isLocal, isMobile }) {
       if (file) doImport(file, hint);
     });
   }
+}
+
+// 安卓共享存储（D48）：把词表切到外部目录，Syncthing 之类的工具就能直接同步它。
+// 权限要「所有文件访问」（MANAGE_EXTERNAL_STORAGE），申请入口在 Capacitor 的桥页里
+// （https://localhost/storage.html）——跳到 Node 页面的 WebView 里没有插件桥，只有桥页能调原生。
+const EXTERNAL_DIR = '/storage/emulated/0/Documents/VocabApp';
+let externalMounted = false;
+let externalAutoDone = false;
+
+async function refreshExternalState() {
+  const el = $('#externalState');
+  const cur = settings?.vocabFile || '';
+  if (cur.startsWith('/storage/emulated/0/')) {
+    el.textContent = '当前词表就在共享存储里，可由 Syncthing 等同步';
+    el.className = 'save-state';
+    return;
+  }
+  try {
+    const res = await api(`/api/vocab/external-status?dir=${encodeURIComponent(EXTERNAL_DIR)}`);
+    el.textContent = res.available ? '尚未使用：点了会把词表复制过去并切到那边' : '还没有「所有文件访问」权限，点按钮去系统里开启';
+    el.className = res.available ? 'save-state' : 'save-state bad';
+  } catch {
+    el.textContent = '';
+  }
+}
+
+async function switchToExternal() {
+  const state = $('#externalState');
+  const btn = $('#useExternal');
+  state.textContent = '切换中…';
+  state.className = 'save-state';
+  btn.disabled = true;
+  try {
+    const res = await api('/api/vocab/use-external', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ dir: EXTERNAL_DIR }),
+    });
+    toast(`词表已切到共享存储（${res.stats.total} 词${res.copied ? '，已复制过去' : '，用的是那里已有的那份'}）`);
+    await loadSettings();
+    if (vocabFileReload) await vocabFileReload();
+  } catch (e) {
+    if (e.code === 'externalDenied') {
+      // 没权限：去桥页申请（那里能调原生插件），批下来会自动跳回来并继续
+      state.textContent = '正在打开系统设置去开启权限…';
+      state.className = 'save-state bad';
+      location.href = `https://localhost/storage.html?back=${encodeURIComponent(`${location.origin}/?storage=1`)}`;
+      return;
+    }
+    state.textContent = `切换失败：${e.message}`;
+    state.className = 'save-state bad';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function mountExternalStorage(isAndroidApp) {
+  if (!isAndroidApp) return;
+  if (!externalMounted) {
+    externalMounted = true;
+    const btn = $('#useExternal');
+    let armTimer;
+    btn.addEventListener('click', () => {
+      // 两步确认（同「删除」的 armed 模式）：换文件是大事，先亮一次确认
+      if (!btn.dataset.armed) {
+        btn.dataset.armed = '1';
+        btn.textContent = '确认：切换到共享存储';
+        armTimer = setTimeout(() => {
+          delete btn.dataset.armed;
+          btn.textContent = '使用共享存储文件夹';
+        }, 5000);
+        return;
+      }
+      clearTimeout(armTimer);
+      delete btn.dataset.armed;
+      btn.textContent = '使用共享存储文件夹';
+      switchToExternal();
+    });
+  }
+  // 从权限桥页跳回来（?storage=1）：自动接着切，不用再点一次
+  const wantAuto = new URLSearchParams(location.search).get('storage') === '1';
+  if (wantAuto && !externalAutoDone) {
+    externalAutoDone = true;
+    history.replaceState(null, '', location.pathname);
+    activateTab('settings');
+    setTimeout(switchToExternal, 400);
+  }
+  refreshExternalState();
 }
 
 $('#openEnv').addEventListener('click', () => openConfigFile('env'));

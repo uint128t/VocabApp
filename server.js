@@ -328,6 +328,24 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
 
     '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
 
+    // 共享存储（D48）：把词表切进手机的外部目录（getExternalStorageDirectory/Documents/
+    // VocabApp），Syncthing 这类工具就能直接同步它。只在移动版可用（VOCAB_MOBILE=1）；
+    // 权限是安卓的「所有文件访问」，由前端在桥页申请，这里靠探写来判定给没给。
+    '/api/vocab/external-status': (req, url) => {
+      if (process.env.VOCAB_MOBILE !== '1') throw httpError(501, 'notSupported', '共享存储只在移动版可用');
+      const dir = url.searchParams.get('dir') || '';
+      if (!dir) throw httpError(400, 'badDirDir', 'dir 不能为空');
+      const probe = path.join(dir, '.vocabapp-write-test');
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(probe, 'ok', 'utf8');
+        fs.unlinkSync(probe);
+        return { status: 200, body: { available: true, dir } };
+      } catch {
+        return { status: 200, body: { available: false, dir } };
+      }
+    },
+
     // 设备迁移（D46）：导出「密钥 + 设置」打成一份 .vocabpack（前端再拼上词表）。
     // 密钥值只在服务端出现过、只在回环请求里下发：LAN 上的其他设备取不走。
     '/api/migrate/export': (req) => {
@@ -871,6 +889,40 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       if (!isLoopbackRequest(req)) throw httpError(403, 'localOnly', '文件对话框只会弹在运行服务这台电脑上');
       const picked = await pickWindowsFile();
       return { status: 200, body: { path: picked } };
+    },
+
+    // 「把词表复制过去并切过去」：整份读当前词表 → 校验 → 写外部目标（已有且一样的就不覆盖）
+    // → 改设置里的 vocabFile。失败不切，原词表一个字节不动。
+    '/api/vocab/use-external': async (req) => {
+      if (process.env.VOCAB_MOBILE !== '1') throw httpError(501, 'notSupported', '共享存储只在移动版可用');
+      const body = await readJson(req);
+      const dir = typeof body?.dir === 'string' ? body.dir.trim() : '';
+      if (!dir) throw httpError(400, 'badDir', 'dir 不能为空');
+      const target = path.join(dir, 'Vocabulary.md');
+      if (target === currentSettings().vocabFile) {
+        return { status: 200, body: { stats: parse(store.readFile()).stats, copied: false, vocabFile: target } };
+      }
+      const text = store.readFile();
+      const { stats, errors } = parse(text);
+      if (errors.length) throw httpError(400, 'parseErrors', '当前词表解析失败，未切换', errors.slice(0, 20));
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        const probe = path.join(dir, '.vocabapp-write-test');
+        fs.writeFileSync(probe, 'ok', 'utf8');
+        fs.unlinkSync(probe);
+      } catch (e) {
+        throw httpError(400, 'externalDenied', `写不进共享存储（${e.code || e.message}）：先在系统设置里允许「所有文件访问」`);
+      }
+      const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+      // 那边已经有一份（比如 Syncthing 同步过来的）：只要词表能解析就不动它，避免刚同步的版本被覆盖
+      let copied = false;
+      if (existing === null || parse(existing).errors.length) {
+        fs.writeFileSync(target, text, 'utf8');
+        copied = true;
+      }
+      const patched = settingsStore.patch({ vocabFile: target });
+      if (patched.error) throw httpError(400, patched.error.code, patched.error.message);
+      return { status: 200, body: { stats: parse(copied ? text : existing).stats, copied, vocabFile: target } };
     },
 
     // 整表导入：整份 Markdown 替换当前词表。先解析后写盘——解析不过的文件一个字节都不落，
