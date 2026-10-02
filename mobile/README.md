@@ -1,6 +1,6 @@
 # VocabApp · 安卓版（路线三）
 
-把同一个 Node 后端嵌进 APK：`capacitor-nodejs`（内嵌 nodejs-mobile 内核，Node 18.20）在手机上跑 `server.js`，WebView 加载页收到「服务已就绪」后把主界面导航到 `http://127.0.0.1:5317/`——之后看到的就是与桌面完全相同的前端与后端。后端代码零重写，桌面端通过 `import.meta.dirname` 垫片与平台守卫保持原样。
+把同一个 Node 后端嵌进 APK：`capacitor-nodejs`（内嵌 nodejs-mobile 内核，Node 18.20）在手机上跑 `server.js`，WebView 加载页收到「服务已就绪」后把主界面导航到 `http://127.0.0.1:<设置里的端口>/`——之后看到的就是与桌面完全相同的前端与后端。后端代码零重写，桌面端通过 `import.meta.dirname` 垫片与平台守卫保持原样。
 
 ## 结构
 

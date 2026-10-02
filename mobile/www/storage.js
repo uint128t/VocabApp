@@ -1,6 +1,6 @@
 // 原生能力桥页（D48/D50）：权限、系统文件选择器、系统分享。
 //
-// 为什么单独一个页面：主界面由内嵌服务接管后停在 http://127.0.0.1:5317，那个 WebView 里
+// 为什么单独一个页面：主界面由内嵌服务接管后停在它自己的地址（端口在设置里），那个 WebView 里
 // 没有 Capacitor 插件桥（实测：window.Capacitor 压根不存在）；而 https://localhost 这个
 // Capacitor 的自家页面能调原生插件。所以「把文件交出去」这件事也只能在这里做——主界面里
 // 那颗 `<a download>` 点了不会有任何反应。
@@ -17,13 +17,18 @@
 const plugins = () => (window.Capacitor && window.Capacitor.Plugins) || {};
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode') || 'pick';
-const backUrl = params.get('back') || 'http://127.0.0.1:5317/';
+// 回哪儿去只由调用方给：端口是设置里的值，这一页再写死一个 5317 就是第二个来源。
+const backUrl = params.get('back');
 const msg = document.querySelector('#msg');
 const grant = document.querySelector('#grant');
 const back = document.querySelector('#back');
 
 const withParam = (kv) => `${backUrl}${backUrl.includes('?') ? '&' : '?'}${kv}`;
-const goBack = (kv) => location.replace(kv ? withParam(kv) : backUrl);
+const goBack = (kv) => backUrl && location.replace(kv ? withParam(kv) : backUrl);
+// 没带 back 就没什么可回的，「返回应用」这颗别亮出来骗人。
+const showBack = () => {
+  back.hidden = !backUrl;
+};
 
 let busy = false;
 
@@ -69,7 +74,7 @@ async function pickAndReturn() {
         '这个位置拿不到真实文件路径（云盘或特殊来源），不能直接读写。请选「本机存储」里的文件（比如 Syncthing 同步的文件夹），或者回应用里用「从文件导入并替换…」把它拷进来。';
       grant.textContent = '重新选择';
       grant.hidden = false;
-      back.hidden = false;
+      showBack();
       busy = false;
       return;
     }
@@ -78,7 +83,7 @@ async function pickAndReturn() {
     msg.textContent = `选择文件失败：${e.message || e}`;
     grant.textContent = '重新选择';
     grant.hidden = false;
-    back.hidden = false;
+    showBack();
     busy = false;
   }
 }
@@ -92,7 +97,7 @@ async function shareFile() {
   const { Filesystem, Share } = plugins();
   if (!src || !Filesystem || !Share) {
     msg.textContent = '缺少内容地址或插件没注册：请安装最新版 APK。';
-    back.hidden = false;
+    showBack();
     busy = false;
     return;
   }
@@ -106,7 +111,7 @@ async function shareFile() {
     const { uri } = await Filesystem.getUri({ path: name, directory: 'CACHE' });
     // 分享面板被关掉时插件不一定回话（实测停在「正在打开」），所以先把「返回应用」亮出来
     msg.textContent = `已准备好 ${name}，在分享面板里选一个目标；不想分享就点「返回应用」。`;
-    back.hidden = false;
+    showBack();
     await Share.share({ title: name, dialogTitle: name, files: [uri] });
     goBack();
   } catch (e) {
@@ -114,7 +119,7 @@ async function shareFile() {
     msg.textContent = `没能分享出去：${(e && (e.message || e)) || e}`;
     grant.textContent = '重试';
     grant.hidden = false;
-    back.hidden = false;
+    showBack();
   } finally {
     busy = false;
   }
@@ -146,7 +151,7 @@ async function pickFlow() {
     msg.textContent = '直接读写外部文件需要「所有文件访问」权限。点下面按钮去系统设置里开启，开完回来自动打开文件选择器。';
     grant.hidden = false;
     grant.textContent = '去开启权限';
-    back.hidden = false;
+    showBack();
     await askPermission();
     // 用户去设置页期间这个页面被暂停；回来（visible）就再查一次
     setInterval(async () => {
