@@ -19,7 +19,7 @@ test('parseEnv keeps key=value pairs and ignores comments and blanks', () => {
   });
 });
 
-test('loadConfig picks up keys and the path overrides, but no longer the port', () => {
+test('loadConfig 只管密钥与路径覆盖（端口与词表路径都归 settings.json）', () => {
   const dir = sandbox();
   fs.writeFileSync(path.join(dir, 'Vocabulary.md'), '### A\n');
   const c = loadConfig({
@@ -33,15 +33,14 @@ test('loadConfig picks up keys and the path overrides, but no longer the port', 
       VOCAB_STATE_DIR: 'X:/state',
     },
   });
-  assert.deepEqual(c.keys, { QWEN: 'sk-one', ZHIPU: 'sk-two' });
-  assert.deepEqual(c.keyNames, ['QWEN', 'ZHIPU']);
+  assert.deepEqual(c.readKeys(), { QWEN: 'sk-one', ZHIPU: 'sk-two' });
   // 端口归 settings.json 的 port 管（D44）：.env 里的 PORT 从此只是没人读的死数据
   assert.equal(c.port, undefined);
   assert.equal(c.backupDir, 'X:/backups');
   assert.equal(c.stateDir, 'X:/state');
 });
 
-test('loadConfig no longer decides the vocabulary path', () => {
+test('config 不碰词表路径', () => {
   const dir = sandbox();
   // 词表路径归 settings.json 的 vocabFile 管；config 只认其余那几项
   const c = loadConfig({ dir, env: { VOCAB_FILE: path.join(dir, 'real.md') } });
@@ -55,7 +54,7 @@ test('VOCAB_KEYS_FILE merges key values and readKeys() picks up live changes', (
   const keysFile = path.join(dir, 'keys.json');
   fs.writeFileSync(keysFile, JSON.stringify({ MOBILE: 'sk-m1' }));
   const c = loadConfig({ dir, env: { VOCAB_KEYS_FILE: keysFile, VOCAB_KEY_ENV: 'sk-env' } });
-  assert.deepEqual(c.keys, { ENV: 'sk-env', MOBILE: 'sk-m1' });
+  assert.deepEqual(c.readKeys(), { ENV: 'sk-env', MOBILE: 'sk-m1' });
   assert.equal(c.keysFile, keysFile);
 
   // /api/keys 写完文件后，readKeys() 现读就能看到，不用重启

@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import dgram from 'node:dgram';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -15,8 +14,11 @@ import {
   planSetEntry,
   planSetSenses,
   planSetSensesChecked,
+  wordProblem,
 } from './vocab.js';
-import { createStore, createStateFile } from './store.js';
+import { createStore } from './store.js';
+import { createStateFile } from './state-file.js';
+import { openInEditor, pickWindowsFile } from './desktop-host.js';
 import { createSession } from './session.js';
 import { createAi, CONTRACTS } from './ai.js';
 import { createSettings, DEFAULTS, modelEndpoints } from './settings.js';
@@ -29,6 +31,9 @@ const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
 };
 const BODY_LIMIT = 1_000_000;
 // 档位复判一轮问几次：并行问三次取平均。多问几次只是压单次判断的偶然性，三次够用，
@@ -59,6 +64,13 @@ const SESSION_STATUS = {
   badLang: 400,
   wordNotFound: 404,
 };
+
+// 安卓 App 里主界面（http://127.0.0.1:端口）那个 WebView 没有 Capacitor 插件桥，写文件与系统
+// 分享只能去自家桥页 https://localhost 做；桥页要拿内容就得跨一次源。只放行 Capacitor 那几个
+// 自家 origin（Origin 由浏览器写死，网页伪造不了），其余请求一个 CORS 头都不带——本服务没有
+// 任何鉴权，能少开一寸是一寸。
+const BRIDGE_ORIGINS = new Set(['https://localhost', 'http://localhost', 'capacitor://localhost']);
+const bridgeCors = (req) => (BRIDGE_ORIGINS.has(req.headers.origin) ? { 'access-control-allow-origin': req.headers.origin } : {});
 
 function httpError(status, code, message, details) {
   const e = new Error(message);
@@ -163,17 +175,14 @@ function readEntries(store) {
   return { entries: entries.map(project), stats };
 }
 
+// 词头的规矩在 vocab.js 的 wordProblem 一处；这里先把请求里的原始值收成规范形状。
+// 换行只能在原样里查出来（一压空白就变成普通空格了），所以原样与规范形状各过一遍。
 function readWord(body) {
   const raw = body?.word;
   if (typeof raw !== 'string') throw httpError(400, 'badWord', 'word 必须是字符串');
-  if (/[\r\n]/.test(raw)) throw httpError(400, 'badWord', '词头不能包含换行');
-  const word = raw.replace(/\s+/g, ' ').trim();
-  if (!word || word.includes(' - ')) {
-    throw httpError(400, 'badWord', '词头不能为空或含分隔符');
-  }
-  // 方括号会把词头写成 `- [x] atom`——那是带框主行的形状，整张表从此解析不出来。
-  if (/[[\]]/.test(word)) throw httpError(400, 'badWord', '词头不能包含方括号');
-  return word;
+  const bad = wordProblem(raw) || wordProblem(raw.replace(/\s+/g, ' ').trim());
+  if (bad) throw httpError(400, bad.error.code, bad.error.message);
+  return raw.replace(/\s+/g, ' ').trim();
 }
 
 function readAnswer(value, name) {
@@ -232,52 +241,18 @@ function serveStatic(name, res) {
   fs.createReadStream(abs).pipe(res);
 }
 
-export function createApp({ store, config, ai, settings, session, cefr }) {
-  const openInEditor = (file) =>
-    new Promise((resolve, reject) => {
-      const child = spawn('notepad.exe', [file], { detached: true, stdio: 'ignore' });
-      child.on('error', reject);
-      child.unref();
-      resolve();
-    });
+// store / config / settings 由宿主建好传进来（桌面启动块与测试各自建一份），这里只负责路由。
+// internalVocabFile：部署自带的「应用内部词表」——只有移动版沙盒有这个概念（宿主把路径传进来），
+// 设置页据此提供「用回应用内词表」。桌面版是 null，那个入口不出现。
+export function createApp({ store, config, ai, settingsStore, cefr, internalVocabFile = null }) {
   const grades = cefr || createCefr({ dataFile: config.cefrFile });
-
-  // Windows 的原生文件选择框（词表路径的「浏览…」按钮）。服务是桌面进程，弹窗会出现在
-  // 运行服务这台电脑的桌面上，所以只允许回环请求触发（见调用处）。取消时返回 null。
-  const pickWindowsFile = () =>
-    new Promise((resolve, reject) => {
-      const script = [
-        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-        'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
-        '$d = New-Object System.Windows.Forms.OpenFileDialog',
-        "$d.Title = '选择词表文件（Vocabulary.md）'",
-        "$d.Filter = 'Markdown 词表 (*.md)|*.md|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*'",
-        '$d.CheckFileExists = $true',
-        "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }",
-      ].join('\n');
-      const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true });
-      let out = '';
-      child.stdout.on('data', (c) => {
-        out += c;
-      });
-      child.on('error', reject);
-      child.on('close', () => resolve(out.trim() || null));
-    });
-  const sessionRunner =
-    session ||
-    (ai
-      ? createSession({
-          store,
-          ai,
-          stateFile: createStateFile({ file: path.join(config.stateDir || path.join(moduleDir(import.meta.url), '.state'), 'session.json') }),
-        })
-      : null);
-  const settingsStore =
-    settings ||
-    createSettings({
-      stateFile: createStateFile({ file: config.settingsFile || path.join(moduleDir(import.meta.url), 'settings.json') }),
-      keyNames: () => Object.keys(config.readKeys()),
-    });
+  const sessionRunner = ai
+    ? createSession({
+        store,
+        ai,
+        stateFile: createStateFile({ file: path.join(config.stateDir, 'session.json') }),
+      })
+    : null;
   const currentSettings = () => settingsStore.get().settings;
   const modelList = () => [
     ...new Set([currentSettings().model, ...currentSettings().extraModels.map((m) => m.name)].filter(Boolean)),
@@ -294,7 +269,6 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         body: {
           settings: s,
           settingsError: error,
-          defaults: DEFAULTS,
           contracts: { entry: CONTRACTS.entry, judge: CONTRACTS.judge },
           models: modelList(),
           keyNames: Object.keys(keys),
@@ -304,41 +278,52 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           platform: process.platform,
           local: isLoopbackRequest(req),
           keysFile: config.keysFile,
-          modelRoutes: Object.fromEntries(s.extraModels.map((m) => [m.name, { baseUrl: m.baseUrl, keyName: m.keyName }])),
-          envFile: config.envFile,
-          settingsFile: config.settingsFile,
-          vocabFile: s.vocabFile ?? null,
+          // 词表路径本身只在 settings.vocabFile 一处；这里只补一句「那个文件现在读不读得开」。
           vocabFileError: vocabFileProblem(s.vocabFile),
+          internalVocabFile: internalVocabFile ? path.resolve(internalVocabFile) : null,
           hasKey: Boolean(Object.keys(keys).length),
         },
       };
     },
 
     // 整表导出：把当前词表原文作为附件下发（移动版里这是把词表带出应用的正式通道）。
-    '/api/vocab/export': () => {
+    '/api/vocab/export': (req) => {
       const text = store.readFile();
       const stamp = new Date().toISOString().slice(0, 10);
       return {
         status: 200,
         raw: true,
-        headers: { 'content-disposition': `attachment; filename="Vocabulary-${stamp}.md"` },
+        headers: { 'content-disposition': `attachment; filename="Vocabulary-${stamp}.md"`, ...bridgeCors(req) },
         body: text,
       };
     },
 
     '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
 
-    // 设备迁移（D46）：导出「密钥 + 设置」打成一份 .vocabpack（前端再拼上词表）。
-    // 密钥值只在服务端出现过、只在回环请求里下发：LAN 上的其他设备取不走。
+    // 设备迁移（D46）：导出**一份完整的设备包**——密钥 + 设置 + 整份词表（D50 起词表在这里拼，
+    // 前端只管把这份文件交出去：手机上要交给系统分享，而那边没有插件桥，只能让桥页自己来取，
+    // 所以内容必须一个请求就能拿全）。密钥值只在回环请求里下发：LAN 上别的设备来导，包照样给，
+    // 但 keys 是空的，包里的 keysOmitted 写明这件事。
     '/api/migrate/export': (req) => {
-      if (!isLoopbackRequest(req)) throw httpError(403, 'localOnly', '密钥只有运行服务这台机器自己导得走');
-      const keys = config.readKeys();
+      const loopback = isLoopbackRequest(req);
       const { settings: s, error } = settingsStore.get();
+      const device = process.env.VOCAB_MOBILE === '1' ? 'android' : 'desktop';
+      const pack = {
+        kind: 'vocabapp-pack',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        device,
+        keys: loopback ? config.readKeys() : {},
+        keysOmitted: !loopback,
+        settings: s,
+        settingsError: error || null,
+        vocabText: store.readFile(),
+      };
       return {
         status: 200,
         raw: true,
-        headers: { 'content-disposition': 'attachment; filename="vocab-device.vocabpack.json"' },
-        body: `${JSON.stringify({ kind: 'vocabapp-pack', version: 1, exportedAt: new Date().toISOString(), keys, settings: s, settingsError: error || null }, null, 2)}\n`,
+        headers: { 'content-disposition': `attachment; filename="vocab-device-${device}.vocabpack.json"`, ...bridgeCors(req) },
+        body: `${JSON.stringify(pack, null, 2)}\n`,
       };
     },
 
@@ -922,6 +907,29 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       return { status: 200, body: { stats, vocabFile: target, copied } };
     },
 
+    // 切回应用内部词表（D48）：手机上从外部文件回到沙盒那份。内部那份**原样用**——不把当前
+    // 内容搬过去（要搬内容有「从文件导入并替换…」，从外部文件切过来时也照旧走 /api/vocab/use-file）。
+    // 还没这个文件（比如首次启动前）就建一份空的；解析不过的原样拒收、不动设置。
+    // 桌面版的词表路径是自己填的，没有「内部」这一说 → 501。
+    '/api/vocab/use-internal': () => {
+      if (!internalVocabFile) throw httpError(501, 'notSupported', '这个部署没有「应用内部词表」');
+      const target = path.resolve(internalVocabFile);
+      const exists = fs.existsSync(target);
+      const { stats, errors } = parse(exists ? fs.readFileSync(target, 'utf8') : '');
+      if (errors.length) {
+        throw httpError(400, 'parseErrors', '应用内部那份词表解析不过，先修好它，或用「从文件导入并替换…」整表写入', errors.slice(0, 20));
+      }
+      if (!exists) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, '', 'utf8');
+      }
+      if (target !== currentSettings().vocabFile) {
+        const patched = settingsStore.patch({ vocabFile: target });
+        if (patched.error) throw httpError(400, patched.error.code, patched.error.message);
+      }
+      return { status: 200, body: { stats, vocabFile: target } };
+    },
+
     // 整表导入：整份 Markdown 替换当前词表。先解析后写盘——解析不过的文件一个字节都不落，
     // 写盘前照例备份，导坏了能从备份里找回来。
     '/api/vocab/import': async (req) => {
@@ -946,7 +954,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       const body = await readJson(req);
       const pack = body?.pack;
       if (!pack || typeof pack !== 'object' || Array.isArray(pack) || pack.kind !== 'vocabapp-pack') {
-        throw httpError(400, 'badPack', '这不是 Vocabulary 助手导出的设备包');
+        throw httpError(400, 'badPack', '这不是 VocabApp 导出的设备包');
       }
       if (pack.version !== 1) throw httpError(400, 'badPack', `设备包版本不认识：${pack.version}`);
       // 哪几块参与导入由前端的第一步勾选决定（默认全选）
@@ -967,9 +975,8 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         return map;
       };
       const localVocab = store.readFile();
-      // 设备包分两半：pack 是 JSON（设置与密钥），词表原文放 pack.vocabText（导出的单文件里含它）；
-      // 兼容分开传的 body.vocabText（早期形态与测试）。
-      const remoteVocabRaw = typeof pack.vocabText === 'string' && pack.vocabText.trim() ? pack.vocabText : typeof body.vocabText === 'string' ? body.vocabText : null;
+      // 设备包分两半的说法到此为止：pack 就是完整的一份（keys + settings + vocabText）。
+      const remoteVocabRaw = typeof pack.vocabText === 'string' && pack.vocabText.trim() ? pack.vocabText : null;
       const remoteVocab = remoteVocabRaw && remoteVocabRaw.trim() ? remoteVocabRaw : null;
       let vocab = null;
       if (wants('vocab') && remoteVocab !== null) {
@@ -1017,7 +1024,9 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           };
           let state = 'same';
           if (!same) state = empty(localValue) ? 'one-sided' : empty(remoteValue) ? 'one-sided' : 'conflict';
-          fields.push({ field, label, state, localValue: localValue ?? null, remoteValue: remoteValue ?? null, multi });
+          // 单边时该采用哪边由这里一次判好（前端只照着摆勾选框，不自己再判一遍「空」——
+          // 空数组、全 null 的提示词都算空，前端拿 null 判会漏掉这两种，模型候选就永远搬不过来）
+          fields.push({ field, label, state, localValue: localValue ?? null, remoteValue: remoteValue ?? null, multi, takeRemote: state === 'one-sided' ? empty(localValue) : null });
         };
         push('model', '默认模型', localSettings.model, remoteSettings.model);
         push('extraModels', '模型候选', localSettings.extraModels || [], remoteSettings.extraModels || [], { multi: true });
@@ -1026,7 +1035,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         push('theme', '主题', localSettings.theme, remoteSettings.theme);
         push('port', '端口', localSettings.port, remoteSettings.port);
         push('lanAccess', '局域网访问', localSettings.lanAccess, remoteSettings.lanAccess);
-        push('vocabFile', '词表路径', localSettings.vocabFile, remoteSettings.vocabFile);
+        // 词表路径不参与迁移：各设备各自一份（手机是沙盒、电脑是库里那份），搬过去只会把本机弄坏
         settings = { state: fields.some((f) => f.state === 'conflict') ? 'conflict' : fields.some((f) => f.state === 'one-sided') ? 'differs' : 'same', fields };
       }
 
@@ -1057,24 +1066,11 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     },
 
     // 迁移的写盘步（D46）：前端在冲突面板里逐项选完，把最终结果交回来一次写。
-    // 词表原文整份替换（写前解析校验 + 备份）；设置与密钥逐字段/逐名字合并。
+    // 词表原文整份替换（写前解析校验 + 备份）；密钥与设置逐名字/逐字段合并——**先密钥后设置**：
+    // 模型候选的 keyName 必须能在本机找到，同一包里带过来的密钥得先落盘，整套模型信息才配得齐。
     '/api/migrate/commit': async (req) => {
       const body = await readJson(req);
       const out = {};
-      if (typeof body?.vocabText === 'string' && body.vocabText.trim()) {
-        const { errors, stats } = parse(body.vocabText);
-        if (errors.length) throw httpError(400, 'parseErrors', '词表解析失败，未写入', errors.slice(0, 20));
-        const written = await store.enqueue(() => {
-          const { backup } = store.writeWithBackup(body.vocabText);
-          return { stats, backup };
-        });
-        out.vocab = written;
-      }
-      if (body?.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)) {
-        const patched = settingsStore.patch(body.settings);
-        if (patched.error) throw httpError(400, patched.error.code, patched.error.message);
-        out.settings = patched.settings;
-      }
       if (body?.keys && typeof body.keys === 'object' && !Array.isArray(body.keys)) {
         const entries = Object.entries(body.keys);
         for (const [name, value] of entries) {
@@ -1089,7 +1085,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         } else {
           // 桌面版第一次导入密钥：生成项目目录里的 keys.json（config 会自动认出它），
           // .env 本体一个字节都不动（D16「工具绝不写 .env」保持成立）。
-          const fallback = path.join(config.dir || moduleDir(import.meta.url), 'keys.json');
+          const fallback = path.join(config.dir, 'keys.json');
           const keysStore = createStateFile({ file: fallback });
           const current = keysStore.read() || {};
           for (const [name, value] of entries) current[name] = value.trim();
@@ -1097,6 +1093,19 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           out.keysFile = fallback;
         }
         out.keys = Object.keys(config.readKeys()).sort();
+      }
+      if (body?.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)) {
+        const patched = settingsStore.patch(body.settings);
+        if (patched.error) throw httpError(400, patched.error.code, patched.error.message);
+        out.settings = patched.settings;
+      }
+      if (typeof body?.vocabText === 'string' && body.vocabText.trim()) {
+        const { errors, stats } = parse(body.vocabText);
+        if (errors.length) throw httpError(400, 'parseErrors', '词表解析失败，未写入', errors.slice(0, 20));
+        out.vocab = await store.enqueue(() => {
+          const { backup } = store.writeWithBackup(body.vocabText);
+          return { stats, backup };
+        });
       }
       return { status: 200, body: out };
     },
@@ -1208,10 +1217,11 @@ if (process.env.VOCAB_MOBILE === '1' || (process.argv[1] && pathToFileURL(proces
 
   // 移动版（D45）：数据都在应用沙盒的 dataPath 里。首次启动还没有词表路径时，
   // 给它一个默认值并在缺文件时建一份空词表——安卓上用户没法手填路径，也 browse 不了文件系统。
-  if (process.env.VOCAB_MOBILE === '1' && process.env.VOCAB_DATA_DIR) {
-    const seedPath = path.join(process.env.VOCAB_DATA_DIR, 'Vocabulary.md');
-    if (!settings.get().settings.vocabFile) settings.patch({ vocabFile: seedPath });
-    if (!fs.existsSync(seedPath)) fs.writeFileSync(seedPath, '', 'utf8');
+  // 这个路径也是「应用内部词表」的唯一来源：切到外部文件之后，设置页靠它切回来。
+  const internalVocabFile = process.env.VOCAB_DATA_DIR ? path.join(process.env.VOCAB_DATA_DIR, 'Vocabulary.md') : null;
+  if (process.env.VOCAB_MOBILE === '1' && internalVocabFile) {
+    if (!settings.get().settings.vocabFile) settings.patch({ vocabFile: internalVocabFile });
+    if (!fs.existsSync(internalVocabFile)) fs.writeFileSync(internalVocabFile, '', 'utf8');
   }
 
   // 每个请求都按设置里的当前值找目标：设置页改完保存就立刻生效，不用重启。
@@ -1254,8 +1264,8 @@ if (process.env.VOCAB_MOBILE === '1' || (process.argv[1] && pathToFileURL(proces
   const current = settings.get();
   const port = current.settings.port;
   const host = current.settings.lanAccess ? '0.0.0.0' : '127.0.0.1';
-  createApp({ store, config, ai, settings }).listen(port, host, () => {
-    console.log(`Vocabulary 助手已就绪：http://127.0.0.1:${port}`);
+  createApp({ store, config, ai, settingsStore: settings, internalVocabFile }).listen(port, host, () => {
+    console.log(`VocabApp 已就绪：http://127.0.0.1:${port}`);
     if (current.settings.lanAccess) {
       const ips = Object.values(os.networkInterfaces())
         .flat()

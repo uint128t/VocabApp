@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createApp, isLoopbackRequest } from '../server.js';
-import { createStore, createStateFile } from '../store.js';
+import { createStore } from '../store.js';
+import { createStateFile } from '../state-file.js';
 import { createSettings } from '../settings.js';
 import { parseEnv, loadConfig, readKeysFile } from '../config.js';
 
@@ -46,7 +47,7 @@ const fakeCefr = ({ outside = [], levels = {} } = {}) => ({
   }),
 });
 
-async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {} } = {}) {
+async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {}, internal = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-server-'));
   dirs.push(dir);
   const file = path.join(dir, 'Vocabulary.md');
@@ -69,12 +70,13 @@ async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {} } = {
       return file ? { ...envKeys, ...readKeysFile(file) } : envKeys;
     },
   };
-  config.keys = config.readKeys();
   // 与生产一致：词表路径存在设置里，store 每次都按当前设置取目标（所以改了立刻生效）
   const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: () => Object.keys(config.readKeys()) });
   settings.patch({ vocabFile: file });
   const store = createStore({ file: () => settings.get().settings.vocabFile, backupDir: path.join(dir, 'backups') });
-  const server = createApp({ store, ai, cefr: cefr || fakeCefr(), config, settings });
+  // 应用内部词表（移动版沙盒那份）由宿主传进来；桌面部署没有它，测试按需给一个沙盒副本
+  const internalFile = internal ? path.join(dir, internal) : null;
+  const server = createApp({ store, ai, cefr: cefr || fakeCefr(), config, settingsStore: settings, internalVocabFile: internalFile });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   servers.push(server);
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -88,6 +90,7 @@ async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {} } = {
     settingsFile: config.settingsFile,
     keysFile,
     stateFile: path.join(dir, 'state', 'session.json'),
+    internalFile,
   };
 }
 
@@ -137,14 +140,14 @@ test('GET /api/entries reports a dirty file instead of serving partial data', as
   assert.equal(body.error.details[0].type, 'duplicateWord');
 });
 
-test('GET /api/settings lists models, the vocab path and never leaks the key', async () => {
+test('GET /api/settings lists models and the vocab path and never leaks the key', async () => {
   const { base } = await start();
   const res = await fetch(`${base}/api/settings`);
   const text = await res.text();
   assert.equal(res.status, 200);
   const body = JSON.parse(text);
   assert.deepEqual(body.models, []);
-  assert.match(body.vocabFile, /Vocabulary\.md$/);
+  assert.match(body.settings.vocabFile, /Vocabulary\.md$/);
   assert.ok(!/sk-/.test(text));
   assert.ok(!text.includes('apiKey'));
 });
@@ -204,8 +207,7 @@ test('loadConfig reads a .env file and applies defaults', () => {
     'VOCAB_KEY_TEST=sk-test\nOPENAI_API_KEY=ignored\nVOCAB_FILE=' + path.join(dir, 'V.md') + '\nVOCAB_MODELS=qwen3.8-flash\n',
   );
   const cfg = loadConfig({ dir, env: {} });
-  assert.deepEqual(cfg.keys, { TEST: 'sk-test' });
-  assert.deepEqual(cfg.keyNames, ['TEST']);
+  assert.deepEqual(cfg.readKeys(), { TEST: 'sk-test' });
   assert.equal(cfg.backupDir, path.join(dir, 'backups'));
   assert.equal(loadConfig({ dir, env: { VOCAB_BACKUP_DIR: path.join(dir, 'elsewhere') } }).backupDir, path.join(dir, 'elsewhere'));
 });
@@ -554,7 +556,7 @@ test('POST /api/set-checked reverts the box and touches nothing else', async () 
 
 
 
-test('GET /api/settings returns defaults and contracts without the key', async () => {
+test('GET /api/settings returns the current settings and the contracts without the key', async () => {
   const { base } = await start(SORT_FIXTURE, { ai: fakeAi() });
   const res = await fetch(`${base}/api/settings`);
   const text = await res.text();
@@ -633,7 +635,7 @@ test('词表路径存在设置里，改完立刻生效', async () => {
 
   const saved = await post(base, '/api/settings', { vocabFile: other });
   assert.equal(saved.status, 200);
-  assert.equal(saved.body.vocabFile, other);
+  assert.equal(saved.body.settings.vocabFile, other);
   assert.equal(saved.body.vocabFileError, null);
 
   assert.deepEqual(
@@ -1517,8 +1519,8 @@ test('POST /api/keys 只在配置了 keysFile 的部署上可用，且密钥值�
   assert.ok(fs.existsSync(settingsFile));
 });
 
-test('GET /api/migrate/export 只在回环请求下发密钥值（LAN 取不走）', async () => {
-  const { base } = await start();
+test('GET /api/migrate/export 一次给全整份设备包（密钥 + 设置 + 词表）', async () => {
+  const { base } = await start(SORT_FIXTURE);
   const res = await fetch(`${base}/api/migrate/export`);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-disposition'), /vocabpack/);
@@ -1526,8 +1528,28 @@ test('GET /api/migrate/export 只在回环请求下发密钥值（LAN 取不走�
   assert.equal(pack.kind, 'vocabapp-pack');
   assert.equal(pack.version, 1);
   assert.deepEqual(pack.keys, { TEST: 'sk-test' });
+  assert.equal(pack.keysOmitted, false, '回环请求：密钥在包里');
   assert.equal(typeof pack.settings.theme, 'string');
   assert.equal(typeof pack.exportedAt, 'string');
+  assert.equal(pack.device, 'desktop');
+  assert.equal(pack.vocabText, SORT_FIXTURE, '词表由服务端拼进包里（手机上桥页只取这一个地址）');
+  // 整份包直接喂给 import 就该三块都认出来
+  const back = await post(base, '/api/migrate/import', { pack });
+  assert.equal(back.body.vocab.state, 'same');
+  assert.ok(back.body.settings);
+  assert.ok(back.body.keys);
+});
+
+test('导出接口的 CORS 只给 Capacitor 自家 origin（桥页替主界面取内容）', async () => {
+  const { base } = await start();
+  const allowed = await fetch(`${base}/api/migrate/export`, { headers: { origin: 'https://localhost' } });
+  assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://localhost');
+  const vocab = await fetch(`${base}/api/vocab/export`, { headers: { origin: 'capacitor://localhost' } });
+  assert.equal(vocab.headers.get('access-control-allow-origin'), 'capacitor://localhost');
+  for (const url of ['/api/migrate/export', '/api/vocab/export']) {
+    const denied = await fetch(`${base}${url}`, { headers: { origin: 'https://evil.example' } });
+    assert.equal(denied.headers.get('access-control-allow-origin'), null, url);
+  }
 });
 
 test('POST /api/migrate/import 按章节对齐词表、逐字段比设置、按名字比密钥', async () => {
@@ -1580,6 +1602,82 @@ test('POST /api/migrate/import parts 勾选决定哪几块参与', async () => {
   assert.equal(only.body.vocab, null);
   assert.equal(only.body.settings, null);
   assert.equal(only.body.keys, null);
+});
+
+test('POST /api/migrate/import 单边字段给出该采用哪边（空数组也算空）；词表路径不参与迁移', async () => {
+  const { base } = await start(SORT_FIXTURE);
+  // 本机先设一个只有本机有的默认模型：远端那份补默认值后是 null → 单边，该保留本机
+  assert.equal((await post(base, '/api/settings', { model: 'local-one' })).status, 200);
+  const res = await post(base, '/api/migrate/import', {
+    pack: {
+      kind: 'vocabapp-pack',
+      version: 1,
+      settings: {
+        extraModels: [{ name: 'm1', baseUrl: 'https://a.test/v1', keyName: 'NEWKEY' }],
+        prompts: { entry: '写义项' },
+        vocabFile: '/other/device/Vocabulary.md',
+      },
+    },
+  });
+  assert.equal(res.status, 200);
+  const f = (name) => res.body.settings.fields.find((x) => x.field === name);
+  assert.equal(f('vocabFile'), undefined, '词表路径不再进比对清单');
+  for (const name of ['extraModels', 'prompts']) {
+    assert.equal(f(name).state, 'one-sided', name);
+    assert.equal(f(name).takeRemote, true, `${name} 本机是空的（[] 或全 null），默认该采用远端`);
+  }
+  assert.equal(f('model').state, 'one-sided');
+  assert.equal(f('model').takeRemote, false, '本机有值、远端没有：保留本机');
+});
+
+test('POST /api/migrate/commit 先落密钥再写设置：同一包带来的模型候选一次配齐', async () => {
+  const { base, dir } = await start(SORT_FIXTURE, { env: { VOCAB_KEYS_FILE: 'keys.json' } });
+  const res = await post(base, '/api/migrate/commit', {
+    keys: { NEWKEY: 'sk-n1' },
+    settings: { model: 'm1', extraModels: [{ name: 'm1', baseUrl: 'https://a.test/v1', keyName: 'NEWKEY' }] },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.settings.model, 'm1');
+  assert.deepEqual(res.body.settings.extraModels.map((m) => m.name), ['m1']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'keys.json'), 'utf8')).NEWKEY, 'sk-n1');
+});
+
+test('POST /api/vocab/use-internal 切回应用内部词表；桌面版没有这个概念', async () => {
+  const desktop = await start();
+  assert.equal((await post(desktop.base, '/api/vocab/use-internal', {})).status, 501);
+  assert.equal((await fetch(`${desktop.base}/api/settings`).then((r) => r.json())).internalVocabFile, null);
+
+  const { base, dir, internalFile, settings } = await start(SORT_FIXTURE, { internal: 'appdata/Vocabulary.md' });
+  assert.equal((await fetch(`${base}/api/settings`).then((r) => r.json())).internalVocabFile, internalFile);
+
+  // 内部那份还不存在：切过去建一份空的，设置指过去
+  const made = await post(base, '/api/vocab/use-internal', {});
+  assert.equal(made.status, 200);
+  assert.equal(made.body.vocabFile, internalFile);
+  assert.equal(made.body.stats.total, 0);
+  assert.equal(fs.readFileSync(internalFile, 'utf8'), '');
+  assert.equal(settings.get().settings.vocabFile, internalFile);
+
+  // 内部那份有内容：原样用，不把当前内容搬过去
+  const other = path.join(dir, 'other.md');
+  fs.writeFileSync(other, '### Z\n\n- zebra\n  - [ ] #A1 - an animal - Zebras have stripes.\n');
+  settings.patch({ vocabFile: other });
+  const internalText = '### A\n\n- absorb\n  - [x] #B1 - take in - Plants absorb water through their roots.\n';
+  fs.writeFileSync(internalFile, internalText);
+  const back = await post(base, '/api/vocab/use-internal', {});
+  assert.equal(back.status, 200);
+  assert.equal(back.body.stats.total, 1);
+  assert.equal(fs.readFileSync(internalFile, 'utf8'), internalText);
+  assert.equal(settings.get().settings.vocabFile, internalFile);
+
+  // 内部那份解析不过：拒收且不切换
+  fs.writeFileSync(other, '### Z\n\n- zebra\n  - [ ] #A1 - an animal - Zebras have stripes.\n');
+  settings.patch({ vocabFile: other });
+  fs.writeFileSync(internalFile, '  - [x] #B1 - orphan - Orphan child line.\n');
+  const bad = await post(base, '/api/vocab/use-internal', {});
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.error.code, 'parseErrors');
+  assert.equal(settings.get().settings.vocabFile, other);
 });
 
 test('POST /api/migrate/commit 按选择写盘：词表替换留备份、设置合并、密钥落 keys.json', async () => {

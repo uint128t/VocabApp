@@ -273,13 +273,23 @@ function validateSense(sense) {
   return null;
 }
 
+// 一个词头能不能写进这张表，规矩只有这一处：分隔符「 - 」会把义项行拆开，换行会造出假主行，
+// 方括号会写出 `- [x] atom`（带框主行的形状）——三者都能让整张表从此解析不出来。
+// 读接口的参数（server.js 的 readWord）与写盘前的校验（validateFields）都过这里。
+export function wordProblem(word) {
+  if (!word) return err('badWord', '词头不能为空');
+  if (word.includes(' - ')) return err('badWord', '词头不能包含分隔符');
+  if (/[\r\n]/.test(word)) return err('badWord', '词头不能包含换行');
+  if (/[[\]]/.test(word)) return err('badWord', '词头不能包含方括号');
+  return null;
+}
+
 function validateFields({ word, checked, senses }) {
   if (typeof word !== 'string' || word.trim() === '' || word !== word.trim()) {
     return err('badWord', '词头不能为空或带首尾空格');
   }
-  // 方括号要挡住：`- [x] atom` 会被解析器当成「带框的主行」，整张表从此读不出来。
-  if (word.includes(' - ') || word.includes('\n')) return err('badWord', '词头不能包含分隔符或换行');
-  if (/[[\]]/.test(word)) return err('badWord', '词头不能包含方括号');
+  const bad = wordProblem(word);
+  if (bad) return bad;
   if (checked !== undefined && typeof checked !== 'boolean') return err('badChecked', 'checked 必须是布尔值');
   if (!senses.length) return err('badSenses', '每个词至少要有一条义项');
   for (const sense of senses) {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { DEFAULTS, createSettings, modelEndpoints } from '../settings.js';
-import { createStateFile } from '../store.js';
+import { createStateFile } from '../state-file.js';
 
 const dirs = [];
 after(() => {

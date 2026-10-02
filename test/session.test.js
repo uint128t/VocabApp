@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createSession } from '../session.js';
-import { createStore, createStateFile } from '../store.js';
+import { createStore } from '../store.js';
+import { createStateFile } from '../state-file.js';
 
 const FIXTURE =
   '### A\n\n- absorb\n  - [x] #B1 - take in - Plants absorb water.\n- abyss\n  - [ ] #C2 - deep hole - The ship disappeared into the abyss.\n\n### B\n\n- ballpoint\n  - [x] #B1 - a pen - This ballpoint leaks.\n- bump\n  - [ ] #B2 - raised area - There is a bump on the road.\n';

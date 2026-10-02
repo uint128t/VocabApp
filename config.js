@@ -28,21 +28,19 @@ export function loadConfig({ dir = moduleDir(import.meta.url), env = process.env
   const explicitKeysFile = src.VOCAB_KEYS_FILE || null;
   const defaultKeysFile = path.join(dir, 'keys.json');
   const resolveKeysFile = () => explicitKeysFile || (fs.existsSync(defaultKeysFile) ? defaultKeysFile : null);
+  // 密钥值一律现读（.env 由用户手工维护、keys.json 运行期可增改），所以这里只给函数，不留快照。
   const readKeys = () => {
     const file = resolveKeysFile();
     return file ? { ...envKeys, ...readKeysFile(file) } : envKeys;
   };
-  const keys = readKeys();
 
   return {
     dir,
     envFile,
-    keys,
     get keysFile() {
       return resolveKeysFile();
     },
     readKeys,
-    keyNames: Object.keys(keys),
     cefrFile: src.VOCAB_CEFR_FILE || path.join(dir, 'data', 'cefr.json'),
     backupDir: src.VOCAB_BACKUP_DIR || path.join(dir, 'backups'),
     settingsFile: src.VOCAB_SETTINGS_FILE || path.join(dir, 'settings.json'),

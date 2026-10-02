@@ -13,6 +13,14 @@ const THEMES = new Set(['auto', 'light', 'dark']);
 const LANGS = new Set(['zh', 'en']);
 const PROMPT_KEYS = ['entry', 'judge'];
 const PROMPT_MAX = 4000;
+// 监听端口的合法区间：设置页的数字框、启动块的读回、移动版的兜底都按这一处判。
+export const PORT_RANGE = [1024, 65535];
+
+// 把任意来源的端口值收成能用的整数：不是合法端口就回默认值（设置页交来的数字串也走这里）。
+export function resolvePort(value, fallback = DEFAULTS.port) {
+  const n = typeof value === 'string' ? Number(value.trim()) : value;
+  return Number.isInteger(n) && n >= PORT_RANGE[0] && n <= PORT_RANGE[1] ? n : fallback;
+}
 
 const bad = (message) => ({ error: { code: 'badSettings', message } });
 const cloneDefaults = () => structuredClone(DEFAULTS);
@@ -41,7 +49,7 @@ function normalizeModel(entry, keyNames) {
   if (typeof raw.keyName !== 'string' || !raw.keyName.trim()) throw new Error(`${name} 的密钥名不能为空`);
   const keyName = raw.keyName.trim();
   if (keyNames && !keyNames.includes(keyName)) {
-    throw new Error(`.env 里没有名为 ${keyName} 的密钥（用 VOCAB_KEY_${keyName}=… 添加）`);
+    throw new Error(`没有名为 ${keyName} 的密钥（桌面版写在 .env，手机在设置页的密钥管理里加）`);
   }
 
   let extra;
@@ -102,12 +110,10 @@ function mergeSettings(current, patch, { keyNames } = {}) {
       next.theme = patch.theme;
     }
     // 端口与访问范围（D44）：保存后要重启服务才生效，所以这里只管存得对。
-    // 设置页的数字框交来的是字符串，数字串也收；其余形态一律驳回。
+    // 设置页的数字框交来的是字符串，数字串也收（同一套判据在 resolvePort 里）。
     if ('port' in patch) {
-      const n = typeof patch.port === 'string' ? Number(patch.port.trim()) : patch.port;
-      if (!Number.isInteger(n) || n < 1024 || n > 65535) {
-        throw new Error('port 必须是 1024–65535 之间的整数');
-      }
+      const n = resolvePort(patch.port, null);
+      if (n === null) throw new Error(`port 必须是 ${PORT_RANGE[0]}–${PORT_RANGE[1]} 之间的整数`);
       next.port = n;
     }
     if ('lanAccess' in patch) {
