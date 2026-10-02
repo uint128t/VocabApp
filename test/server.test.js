@@ -53,15 +53,23 @@ async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {} } = {
   fs.writeFileSync(file, content);
   const keysFile = envOverrides.VOCAB_KEYS_FILE ? path.join(dir, envOverrides.VOCAB_KEYS_FILE) : null;
   const envKeys = { TEST: 'sk-test' };
+  const resolveKeysFile = () => keysFile || (fs.existsSync(path.join(dir, 'keys.json')) ? path.join(dir, 'keys.json') : null);
   const config = {
+    dir,
     settingsFile: path.join(dir, 'settings.json'),
     stateDir: path.join(dir, 'state'),
     envFile: path.join(dir, '.env'),
-    // 与生产 config 一致：keysFile 存在时 readKeys() 现读它（移动版的密钥在运行期可增改）
-    keysFile,
-    keys: keysFile ? { ...envKeys, ...readKeysFile(keysFile) } : envKeys,
-    readKeys: () => (keysFile ? { ...envKeys, ...readKeysFile(keysFile) } : envKeys),
+    // 与生产 config 一致：显式 keysFile 优先，否则认领目录里的 keys.json（设备包导入的落点），
+    // 动态解析 + readKeys() 每次现读——移动版运行期可增改密钥。
+    get keysFile() {
+      return resolveKeysFile();
+    },
+    readKeys: () => {
+      const file = resolveKeysFile();
+      return file ? { ...envKeys, ...readKeysFile(file) } : envKeys;
+    },
   };
+  config.keys = config.readKeys();
   // 与生产一致：词表路径存在设置里，store 每次都按当前设置取目标（所以改了立刻生效）
   const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: () => Object.keys(config.readKeys()) });
   settings.patch({ vocabFile: file });
@@ -1507,4 +1515,102 @@ test('POST /api/keys 只在配置了 keysFile 的部署上可用，且密钥值�
     assert.equal((await post(base, '/api/keys', bad)).status, 400, JSON.stringify(bad));
   }
   assert.ok(fs.existsSync(settingsFile));
+});
+
+test('GET /api/migrate/export 只在回环请求下发密钥值（LAN 取不走）', async () => {
+  const { base } = await start();
+  const res = await fetch(`${base}/api/migrate/export`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition'), /vocabpack/);
+  const pack = JSON.parse(await res.text());
+  assert.equal(pack.kind, 'vocabapp-pack');
+  assert.equal(pack.version, 1);
+  assert.deepEqual(pack.keys, { TEST: 'sk-test' });
+  assert.equal(typeof pack.settings.theme, 'string');
+  assert.equal(typeof pack.exportedAt, 'string');
+});
+
+test('POST /api/migrate/import 按章节对齐词表、逐字段比设置、按名字比密钥', async () => {
+  const { base } = await start(SORT_FIXTURE);
+  // 造一份设备包：词表 A 章节改了、B 章节删了、多一个 C；设置只给 model 与 theme（都是冲突）；密钥多一把
+  const remoteVocab = '### A\n\n- attentive\n  - [ ] #B2 - 换过的释义 - She is attentive in class.\n\n### C\n\n- curious\n  - [ ] #A2 - eager to know - Cats are curious.\n';
+  const res = await post(base, '/api/migrate/import', {
+    pack: {
+      kind: 'vocabapp-pack',
+      version: 1,
+      keys: { TEST: 'sk-x', EXTRA: 'sk-e' },
+      settings: { model: 'from-other', theme: 'dark', port: 6001, lanAccess: true },
+      vocabText: remoteVocab,
+    },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.vocab.state, 'conflict');
+  const byName = (n) => res.body.vocab.entries.find((e) => e.section === n);
+  assert.equal(byName('A').state, 'conflict');
+  assert.match(byName('A').localText, /paying attention/);
+  assert.match(byName('A').remoteText, /换过的释义/);
+  assert.equal(byName('C').state, 'one-sided');
+  assert.equal(byName('C').localText, null);
+
+  const f = (name) => res.body.settings.fields.find((x) => x.field === name);
+  assert.equal(f('model').state, 'one-sided', '本地没设默认模型，远端设了就单边带过来');
+  assert.equal(f('theme').state, 'conflict', '本地 auto vs 远端 dark：两边都有值');
+  assert.equal(f('port').state, 'conflict');
+  assert.equal(f('lang').state, 'same', '远端没写 lang：按默认值 zh 算，与本地一致');
+  assert.deepEqual(f('extraModels').localValue, []);
+
+  // 密钥只报名字、有无与长度，不回显值：TEST 两边都有但值不同 → 冲突
+  const key = (n) => res.body.keys.entries.find((e) => e.name === n);
+  assert.equal(key('TEST').state, 'conflict');
+  assert.equal(key('TEST').localLen, 'sk-test'.length);
+  assert.equal(key('TEST').remoteLen, 'sk-x'.length);
+  assert.equal(key('EXTRA').state, 'one-sided');
+  const raw = JSON.stringify(res.body);
+  assert.ok(!raw.includes('sk-x') && !raw.includes('sk-e'), '响应里不含任何密钥值');
+});
+
+test('POST /api/migrate/import parts 勾选决定哪几块参与', async () => {
+  const { base } = await start(SORT_FIXTURE);
+  const pack = { kind: 'vocabapp-pack', version: 1, keys: { K: 'v' }, settings: { theme: 'dark' } };
+  const res = await post(base, '/api/migrate/import', { pack, vocabText: '### Z\n\n- zed\n', parts: { vocab: false } });
+  assert.equal(res.body.vocab, null);
+  assert.ok(res.body.settings);
+  assert.ok(res.body.keys);
+  const only = await post(base, '/api/migrate/import', { pack, parts: { settings: false, keys: false, vocab: false } });
+  assert.equal(only.body.vocab, null);
+  assert.equal(only.body.settings, null);
+  assert.equal(only.body.keys, null);
+});
+
+test('POST /api/migrate/commit 按选择写盘：词表替换留备份、设置合并、密钥落 keys.json', async () => {
+  const { base, file, dir } = await start(SORT_FIXTURE);
+  const chosen = '### A\n\n- attentive\n  - [ ] #B2 - chosen text - She is attentive in class.\n';
+  const res = await post(base, '/api/migrate/commit', {
+    vocabText: chosen,
+    settings: { theme: 'dark' },
+    keys: { IMPORTED: 'sk-i1' },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.vocab.stats.total, 1);
+  assert.match(res.body.vocab.backup, /^Vocabulary\./);
+  assert.equal(fs.readFileSync(file, 'utf8'), chosen);
+  assert.equal(res.body.settings.theme, 'dark');
+
+  // 桌面夹具没有 keysFile → 生成项目目录里 keys.json，值写进去、响应只回名字
+  assert.deepEqual(res.body.keys, ['IMPORTED', 'TEST']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'keys.json'), 'utf8')).IMPORTED, 'sk-i1');
+  assert.ok(!JSON.stringify(res.body).includes('sk-i1'));
+
+  // 坏词表拒收、不动盘；坏密钥名拒收
+  const before = fs.readFileSync(file);
+  assert.equal((await post(base, '/api/migrate/commit', { vocabText: '  - [x] #B1 - orphan - x.\n' })).status, 400);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal((await post(base, '/api/migrate/commit', { keys: { 'BAD NAME': 'v' } })).status, 400);
+});
+
+test('POST /api/migrate/import 拒绝不是设备包的东西', async () => {
+  const { base } = await start();
+  for (const bad of [{}, { pack: {} }, { pack: { kind: 'other', version: 1 } }, { pack: { kind: 'vocabapp-pack', version: 99 } }]) {
+    assert.equal((await post(base, '/api/migrate/import', bad)).status, 400, JSON.stringify(bad));
+  }
 });

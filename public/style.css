@@ -1360,6 +1360,109 @@ button:disabled {
   flex: 1 1 320px;
 }
 
+/* ---- 设备迁移比对清单（D46） ---- */
+.mig-block {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mig-title {
+  font-size: 14px;
+}
+
+.mig-sub {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+
+.mig-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.mig-item:last-of-type {
+  border-bottom: none;
+}
+
+.mig-item-head {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.mig-tag-conflict {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.mig-tag-one-sided {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.mig-pick {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+/* 并排 diff：两栏等高滚动，差异行上色 */
+.mig-diff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mig-diff-head {
+  color: var(--fg-muted);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.mig-diff {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mig-diff-line.local {
+  background: var(--danger-soft);
+}
+
+.mig-diff-line.remote {
+  background: var(--accent-soft);
+}
+
+.mig-values {
+  display: grid;
+  gap: 3px;
+  font-size: 12.5px;
+  margin: 4px 0;
+}
+
+.mig-values code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .mig-diff-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---- 提示条 ---- */
 @keyframes rise-in {
   from {

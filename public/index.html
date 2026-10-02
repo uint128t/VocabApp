@@ -158,6 +158,21 @@
               </fieldset>
 
               <fieldset>
+                <legend>设备迁移</legend>
+                <div class="row">
+                  <button id="packExport" class="btn" type="button">导出设备包</button>
+                  <button id="packImport" class="btn" type="button">从其他设备导入…</button>
+                  <input id="packFile" type="file" accept=".json,.vocabpack,application/json" hidden />
+                  <span id="packState" class="save-state"></span>
+                </div>
+                <p class="hint">
+                  设备包 = .env 密钥 + settings.json + 整份词表（一个 .vocabpack.json 文件，含密钥明文，只在自己设备之间传）。
+                  导入时会逐块和本机比对：一样就跳过、只有一边有值就直接搬、两边都有且不同就把两版摆出来让你逐项选。
+                </p>
+                <div id="packResult" class="job-result" hidden></div>
+              </fieldset>
+
+              <fieldset>
                 <legend>外观与默认</legend>
                 <div class="row">
                   <label class="inline-field">主题

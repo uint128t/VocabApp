@@ -88,6 +88,13 @@ function upstreamError(e, { configStatus = AI_STATUS.aiConfig, details } = {}) {
   return httpError(status, e.code || 'aiUnknown', e.message, details);
 }
 
+// 只认本机回环的判定（设备迁移用，D46）：密钥值只有运行服务这台机器自己取得走，
+// 局域网里的其他设备（哪怕开着 lanAccess）一律 403。
+export function isLoopbackRequest(req) {
+  const addr = req?.socket?.remoteAddress || '';
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
 function project(e) {
   return {
     chapter: e.chapter,
@@ -295,6 +302,20 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     },
 
     '/api/backups': () => ({ status: 200, body: { files: store.listBackups() } }),
+
+    // 设备迁移（D46）：导出「密钥 + 设置」打成一份 .vocabpack（前端再拼上词表）。
+    // 密钥值只在服务端出现过、只在回环请求里下发：LAN 上的其他设备取不走。
+    '/api/migrate/export': (req) => {
+      if (!isLoopbackRequest(req)) throw httpError(403, 'localOnly', '密钥只有运行服务这台机器自己导得走');
+      const keys = config.readKeys();
+      const { settings: s, error } = settingsStore.get();
+      return {
+        status: 200,
+        raw: true,
+        headers: { 'content-disposition': 'attachment; filename="vocab-device.vocabpack.json"' },
+        body: `${JSON.stringify({ kind: 'vocabapp-pack', version: 1, exportedAt: new Date().toISOString(), keys, settings: s, settingsError: error || null }, null, 2)}\n`,
+      };
+    },
 
     // 进程启动以来的模型用量：一次批量跑几千次调用，前端拿两次读数相减就知道这轮花了多少。
     '/api/usage': () => ({ status: 200, body: { usage: ai ? ai.usage() : { calls: 0, prompt: 0, completion: 0, reasoning: 0 } } }),
@@ -832,6 +853,168 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
         const { backup } = store.writeWithBackup(text);
         return { status: 200, body: { stats, backup } };
       });
+    },
+
+    // 设备迁移（D46）：吃一份 .vocabpack，把「密钥 / 设置 / 词表」三块各自与本地比对，
+    // 有冲突（两边不同且都不是空）就把两版内容一起摆出来，让前端画 diff、逐项来选。
+    // 不做任何合并猜测：词表按章节行（`### X`）对齐，模型/提示词按语义拆分，密钥按名字。
+    '/api/migrate/import': async (req) => {
+      const body = await readJson(req);
+      const pack = body?.pack;
+      if (!pack || typeof pack !== 'object' || Array.isArray(pack) || pack.kind !== 'vocabapp-pack') {
+        throw httpError(400, 'badPack', '这不是 Vocabulary 助手导出的设备包');
+      }
+      if (pack.version !== 1) throw httpError(400, 'badPack', `设备包版本不认识：${pack.version}`);
+      // 哪几块参与导入由前端的第一步勾选决定（默认全选）
+      const wants = (name) => body?.parts?.[name] !== false;
+
+      // ---- 词表：按章节行对齐 ----
+      const sections = (text) => {
+        const map = new Map();
+        let current = '';
+        const chunks = String(text ?? '').split(/\r?\n/);
+        for (const line of chunks) {
+          const m = /^### (.+)$/.exec(line);
+          if (m) current = m[1].trim();
+          if (!map.has(current)) map.set(current, []);
+          map.get(current).push(line);
+        }
+        for (const [k, v] of map) map.set(k, v.join('\n').replace(/\n+$/, ''));
+        return map;
+      };
+      const localVocab = store.readFile();
+      // 设备包分两半：pack 是 JSON（设置与密钥），词表原文放 pack.vocabText（导出的单文件里含它）；
+      // 兼容分开传的 body.vocabText（早期形态与测试）。
+      const remoteVocabRaw = typeof pack.vocabText === 'string' && pack.vocabText.trim() ? pack.vocabText : typeof body.vocabText === 'string' ? body.vocabText : null;
+      const remoteVocab = remoteVocabRaw && remoteVocabRaw.trim() ? remoteVocabRaw : null;
+      let vocab = null;
+      if (wants('vocab') && remoteVocab !== null) {
+        if (remoteVocab === localVocab) {
+          vocab = { state: 'same', localText: localVocab, remoteText: remoteVocab };
+        } else {
+          const ls = sections(localVocab);
+          const rs = sections(remoteVocab);
+          const names = new Set([...ls.keys(), ...rs.keys()]);
+          const entries = [];
+          for (const name of names) {
+            const l = ls.get(name) ?? null;
+            const r = rs.get(name) ?? null;
+            if (l === r) {
+              entries.push({ section: name, state: 'same', localText: l, remoteText: r });
+            } else if (l !== null && r !== null) {
+              entries.push({ section: name || '（文件开头）', state: 'conflict', localText: l, remoteText: r });
+            } else {
+              entries.push({ section: name || '（文件开头）', state: 'one-sided', localText: l, remoteText: r });
+            }
+          }
+          vocab = { state: entries.some((e) => e.state === 'conflict') ? 'conflict' : 'differs', entries, localText: localVocab, remoteText: remoteVocab };
+        }
+      }
+
+      // ---- 设置：按字段语义拆分（不是整段比对象）----
+      const localSettings = settingsStore.get().settings;
+      // 远端设置按默认值补齐：设备包来自一次完整导出，字段本应齐全；缺的按「还是默认值」算，
+      // 免得把手写包里的缺字段当成「远端要清空这项」。
+      const remoteSettings = pack.settings && typeof pack.settings === 'object'
+        ? { ...DEFAULTS, ...pack.settings, prompts: { ...DEFAULTS.prompts, ...(pack.settings.prompts || {}) } }
+        : null;
+      let settings = null;
+      if (wants('settings') && remoteSettings) {
+        const fields = [];
+        const push = (field, label, localValue, remoteValue, { multi = false } = {}) => {
+          const same = JSON.stringify(localValue ?? null) === JSON.stringify(remoteValue ?? null);
+          // 「空」= null / undefined / 空数组 / 全 null 的对象（提示词那组两边都可能只写了一半）：
+          // 一边空、另一边有值算单边（直接搬），两边都有值且不同才算冲突。
+          const empty = (v) => {
+            if (v === null || v === undefined) return true;
+            if (multi && Array.isArray(v) && !v.length) return true;
+            if (v && typeof v === 'object' && !Array.isArray(v)) return Object.values(v).every((x) => x === null || x === undefined);
+            return false;
+          };
+          let state = 'same';
+          if (!same) state = empty(localValue) ? 'one-sided' : empty(remoteValue) ? 'one-sided' : 'conflict';
+          fields.push({ field, label, state, localValue: localValue ?? null, remoteValue: remoteValue ?? null, multi });
+        };
+        push('model', '默认模型', localSettings.model, remoteSettings.model);
+        push('extraModels', '模型候选', localSettings.extraModels || [], remoteSettings.extraModels || [], { multi: true });
+        push('prompts', '提示词覆盖', localSettings.prompts || {}, remoteSettings.prompts || {});
+        push('lang', '反馈语言', localSettings.lang, remoteSettings.lang);
+        push('theme', '主题', localSettings.theme, remoteSettings.theme);
+        push('port', '端口', localSettings.port, remoteSettings.port);
+        push('lanAccess', '局域网访问', localSettings.lanAccess, remoteSettings.lanAccess);
+        push('vocabFile', '词表路径', localSettings.vocabFile, remoteSettings.vocabFile);
+        settings = { state: fields.some((f) => f.state === 'conflict') ? 'conflict' : fields.some((f) => f.state === 'one-sided') ? 'differs' : 'same', fields };
+      }
+
+      // ---- 密钥：按名字，只报名字、有无与长度差，永不回显值 ----
+      const localKeyVals = config.readKeys();
+      const remoteKeyVals = pack.keys && typeof pack.keys === 'object' && !Array.isArray(pack.keys) ? pack.keys : {};
+      let keys = null;
+      if (wants('keys') && Object.keys(remoteKeyVals).length) {
+        const entries = [];
+        for (const name of new Set([...Object.keys(localKeyVals), ...Object.keys(remoteKeyVals)])) {
+          const l = Object.prototype.hasOwnProperty.call(localKeyVals, name);
+          const r = Object.prototype.hasOwnProperty.call(remoteKeyVals, name);
+          const same = l && r && String(localKeyVals[name]) === String(remoteKeyVals[name]);
+          entries.push({
+            name,
+            state: same ? 'same' : l && r ? 'conflict' : 'one-sided',
+            local: l,
+            remote: r,
+            // 值不能看，给个长度提示：长度不同基本就是换了把钥匙
+            localLen: l ? String(localKeyVals[name]).length : null,
+            remoteLen: r ? String(remoteKeyVals[name]).length : null,
+          });
+        }
+        keys = { state: entries.some((e) => e.state === 'conflict') ? 'conflict' : entries.some((e) => e.state === 'one-sided') ? 'differs' : 'same', entries };
+      }
+
+      return { status: 200, body: { vocab, settings, keys } };
+    },
+
+    // 迁移的写盘步（D46）：前端在冲突面板里逐项选完，把最终结果交回来一次写。
+    // 词表原文整份替换（写前解析校验 + 备份）；设置与密钥逐字段/逐名字合并。
+    '/api/migrate/commit': async (req) => {
+      const body = await readJson(req);
+      const out = {};
+      if (typeof body?.vocabText === 'string' && body.vocabText.trim()) {
+        const { errors, stats } = parse(body.vocabText);
+        if (errors.length) throw httpError(400, 'parseErrors', '词表解析失败，未写入', errors.slice(0, 20));
+        const written = await store.enqueue(() => {
+          const { backup } = store.writeWithBackup(body.vocabText);
+          return { stats, backup };
+        });
+        out.vocab = written;
+      }
+      if (body?.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)) {
+        const patched = settingsStore.patch(body.settings);
+        if (patched.error) throw httpError(400, patched.error.code, patched.error.message);
+        out.settings = patched.settings;
+      }
+      if (body?.keys && typeof body.keys === 'object' && !Array.isArray(body.keys)) {
+        const entries = Object.entries(body.keys);
+        for (const [name, value] of entries) {
+          if (!/^[A-Za-z0-9_]+$/.test(name)) throw httpError(400, 'badKeyName', `密钥名只能用字母、数字和下划线：${name}`);
+          if (typeof value !== 'string' || !value.trim()) throw httpError(400, 'badKeyName', `${name} 的值不能为空`);
+        }
+        if (config.keysFile) {
+          const keysStore = createStateFile({ file: config.keysFile });
+          const current = keysStore.read() || {};
+          for (const [name, value] of entries) current[name] = value.trim();
+          keysStore.write(current);
+        } else {
+          // 桌面版第一次导入密钥：生成项目目录里的 keys.json（config 会自动认出它），
+          // .env 本体一个字节都不动（D16「工具绝不写 .env」保持成立）。
+          const fallback = path.join(config.dir || moduleDir(import.meta.url), 'keys.json');
+          const keysStore = createStateFile({ file: fallback });
+          const current = keysStore.read() || {};
+          for (const [name, value] of entries) current[name] = value.trim();
+          keysStore.write(current);
+          out.keysFile = fallback;
+        }
+        out.keys = Object.keys(config.readKeys()).sort();
+      }
+      return { status: 200, body: out };
     },
 
     // 密钥值管理（移动版专用，D45）：桌面版的密钥在 .env 里，由用户手工维护、工具绝不写；

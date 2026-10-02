@@ -1,6 +1,7 @@
-// 设置面板与主题：模型候选、提示词、主题循环、打开配置文件。
+// 设置面板与主题：模型候选、提示词、主题循环、打开配置文件、设备迁移。
 
 import { $, api, toast, fillSelect } from './core.js';
+import { initMigrate } from './migrate.js';
 
 function fillModelSelect(models, current) {
   const sel = $('#model');
@@ -443,5 +444,14 @@ for (const btn of document.querySelectorAll('.reset-prompt')) {
     setSaveState('清空即恢复默认，记得保存');
   });
 }
+
+// 设备迁移模块用这套收尾：把设置与词表重新读一遍，轮次面板也对一遍
+initMigrate({
+  reload: async () => {
+    await loadSettings();
+    if (vocabFileReload) await vocabFileReload();
+    if (panelsReload) await panelsReload();
+  },
+});
 
 export { settings, loadSettings };

@@ -15,3 +15,6 @@ Vocabulary.md
 Thumbs.db
 Desktop.ini
 *.log
+
+# 设备包导入的补充密钥（工具生成，勿提交）
+keys.json

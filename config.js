@@ -23,18 +23,25 @@ export function loadConfig({ dir = moduleDir(import.meta.url), env = process.env
     if (name.startsWith('VOCAB_KEY_') && name.length > 10 && value) envKeys[name.slice(10)] = value;
   }
 
-  // 移动版（D45）没有可编辑的 .env：密钥值放应用沙盒里的一个 JSON 文件（VOCAB_KEYS_FILE 指过去），
-  // 而且运行期可以增改（/api/keys），所以 readKeys() 每次现读。桌面版不设 keysFile，
-  // 行为照旧——.env 仍是密钥的唯一来源，工具绝不写它。
-  const keysFile = src.VOCAB_KEYS_FILE || null;
-  const keys = keysFile ? { ...envKeys, ...readKeysFile(keysFile) } : envKeys;
+  // keys.json 是「补充密钥源」：移动版用 VOCAB_KEYS_FILE 指进应用沙盒；桌面版从设备包导入密钥时
+  // 也会在项目目录里生成一份（工具绝不写 .env，D16 不变），此后自动被认出来。readKeys() 每次现读。
+  const explicitKeysFile = src.VOCAB_KEYS_FILE || null;
+  const defaultKeysFile = path.join(dir, 'keys.json');
+  const resolveKeysFile = () => explicitKeysFile || (fs.existsSync(defaultKeysFile) ? defaultKeysFile : null);
+  const readKeys = () => {
+    const file = resolveKeysFile();
+    return file ? { ...envKeys, ...readKeysFile(file) } : envKeys;
+  };
+  const keys = readKeys();
 
   return {
     dir,
     envFile,
     keys,
-    keysFile,
-    readKeys: () => (keysFile ? { ...envKeys, ...readKeysFile(keysFile) } : keys),
+    get keysFile() {
+      return resolveKeysFile();
+    },
+    readKeys,
     keyNames: Object.keys(keys),
     cefrFile: src.VOCAB_CEFR_FILE || path.join(dir, 'data', 'cefr.json'),
     backupDir: src.VOCAB_BACKUP_DIR || path.join(dir, 'backups'),

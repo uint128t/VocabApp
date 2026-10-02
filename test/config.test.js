@@ -61,9 +61,21 @@ test('VOCAB_KEYS_FILE merges key values and readKeys() picks up live changes', (
   // /api/keys 写完文件后，readKeys() 现读就能看到，不用重启
   fs.writeFileSync(keysFile, JSON.stringify({ MOBILE: 'sk-m2', NEW: 'sk-n1' }));
   assert.deepEqual(c.readKeys(), { ENV: 'sk-env', MOBILE: 'sk-m2', NEW: 'sk-n1' });
+});
 
-  // 没有 keysFile 的桌面部署：readKeys() 返回静态快照，keysFile 为 null
-  const d = loadConfig({ dir, env: { VOCAB_KEY_ENV: 'sk-env' } });
-  assert.equal(d.keysFile, null);
-  assert.deepEqual(d.readKeys(), { ENV: 'sk-env' });
+test('项目目录里的 keys.json 不用环境变量也会被认出来（设备包导入的落点，D46）', () => {
+  const bare = sandbox();
+  // 没有 keys.json 也没有环境变量：只有 .env 的密钥，keysFile 为空
+  const none = loadConfig({ dir: bare, env: { VOCAB_KEY_ENV: 'sk-env' } });
+  assert.equal(none.keysFile, null);
+  assert.deepEqual(none.readKeys(), { ENV: 'sk-env' });
+
+  // 迁移导入写出 keys.json 之后（无需环境变量）：自动并入，且每次现值
+  const dir = sandbox();
+  fs.writeFileSync(path.join(dir, 'keys.json'), JSON.stringify({ IMPORTED: 'sk-i1' }));
+  const c = loadConfig({ dir, env: { VOCAB_KEY_ENV: 'sk-env' } });
+  assert.equal(c.keysFile, path.join(dir, 'keys.json'));
+  assert.deepEqual(c.readKeys(), { ENV: 'sk-env', IMPORTED: 'sk-i1' });
+  fs.writeFileSync(path.join(dir, 'keys.json'), JSON.stringify({ IMPORTED: 'sk-i2' }));
+  assert.deepEqual(c.readKeys(), { ENV: 'sk-env', IMPORTED: 'sk-i2' });
 });
