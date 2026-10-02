@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vocabulary 助手</title>
+    <title>VocabApp</title>
     <script>
       try {
         var t = localStorage.getItem('vocab-theme') || 'auto';
@@ -12,12 +12,13 @@
       } catch (e) {}
     </script>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="/favicon.png" />
   </head>
   <body>
     <div class="shell">
       <aside class="side">
         <div class="brand">
-          <b>Vocabulary 助手</b>
+          <b>VocabApp</b>
           <span>手工词表 · 本地工具</span>
         </div>
 
@@ -65,12 +66,7 @@
               <input id="q" class="search" type="search" placeholder="搜索词头或释义" />
               <select id="chapter" data-all-label="全部章节"><option value="">全部章节</option></select>
               <select id="difficulty" data-all-label="全部难度"><option value="">全部难度</option></select>
-              <select id="mastery">
-                <option value="">掌握状态</option>
-                <option value="full">完全掌握</option>
-                <option value="partial">部分掌握</option>
-                <option value="none">不掌握</option>
-              </select>
+              <select id="mastery"></select>
               <span class="spacer"></span>
               <span id="count" class="count"></span>
               <button id="selectMode" class="btn" type="button">复选模式</button>
@@ -95,7 +91,7 @@
           <section id="panel-learn" class="panel">
             <div class="toolbar">
               <label class="inline-field">反馈语言
-                <select id="learnLang"><option value="zh">中文</option><option value="en">English</option></select>
+                <select id="learnLang"></select>
               </label>
               <label class="inline-field count-field">抽词
                 <input id="learnCount" type="range" min="1" max="50" step="1" value="10" />
@@ -109,7 +105,7 @@
               <button id="learnRestart" class="btn ghost" type="button" hidden>放弃并重开</button>
               <button id="learnAbort" class="btn ghost" type="button" hidden>放弃本轮</button>
             </div>
-            <p class="hint">从「还有义项没掌握」的词里抽一批（部分掌握 + 不掌握，数量看上面的滑块）：先一个一个把整词的义项与例句看一遍，看完再闭卷测这一轮，通过的义项进结算清单。</p>
+            <p class="hint">先逐个把义项与例句看一遍，看完闭卷测这一轮。抽的是还有义项没掌握的词，数量由上面的滑块定。</p>
             <div id="learnCard" class="quiz-card" hidden></div>
             <div id="learnFeedback" class="job-result" hidden></div>
             <div id="learnResult" class="job-result" hidden></div>
@@ -118,7 +114,7 @@
           <section id="panel-review" class="panel">
             <div class="toolbar">
               <label class="inline-field">反馈语言
-                <select id="reviewLang"><option value="zh">中文</option><option value="en">English</option></select>
+                <select id="reviewLang"></select>
               </label>
               <label class="inline-field count-field">抽词
                 <input id="reviewCount" type="range" min="1" max="50" step="1" value="30" />
@@ -146,12 +142,9 @@
                   <input id="vocabFile" type="text" placeholder="Vocabulary.md 的完整路径，例如 C:\Users\你\Notes\Vocabulary.md" />
                   <button id="pickVocab" class="btn" type="button" hidden>浏览…</button>
                   <button id="pickVocabMobile" class="btn" type="button" hidden>选取词表文件…</button>
+                  <button id="useInternalVocab" class="btn ghost" type="button" hidden>用回应用内词表</button>
                   <span id="pickHint" class="save-state" hidden></span>
                 </div>
-                <p class="hint" id="pickVocabHint" hidden>
-                  选中的文件会被<strong>直接读写</strong>（原地用，不拷进应用）——放进 Syncthing 同步的文件夹，电脑与手机就会自动同步同一份词表。
-                  空文件会把当前词表写过去；这个位置读不了/写不了会提示去开「所有文件访问」；云盘位置拿不到真实路径，请改用下面的「从文件导入并替换…」。
-                </p>
                 <p class="hint" id="vocabFileNote">
                   指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。
                 </p>
@@ -173,8 +166,9 @@
                   <span id="packState" class="save-state"></span>
                 </div>
                 <p class="hint">
-                  设备包 = .env 密钥 + settings.json + 整份词表（一个 .vocabpack.json 文件，含密钥明文，只在自己设备之间传）。
-                  导入时会逐块和本机比对：一样就跳过、只有一边有值就直接搬、两边都有且不同就把两版摆出来让你逐项选。
+                  设备包 = 密钥 + settings.json + 整份词表，一个 .vocabpack.json，里面是密钥明文，只在自己设备之间传。
+                  导入时逐块和本机比对：一样的跳过，只有一边有的直接搬，两边都有的把两版摆出来让你逐项选。
+                  <strong>词表路径不参与迁移</strong>，手机和电脑各自一份。
                 </p>
                 <div id="packResult" class="job-result" hidden></div>
               </fieldset>
@@ -183,20 +177,13 @@
                 <legend>外观与默认</legend>
                 <div class="row">
                   <label class="inline-field">主题
-                    <select id="setTheme">
-                      <option value="auto">跟随系统</option>
-                      <option value="light">浅色</option>
-                      <option value="dark">深色</option>
-                    </select>
+                    <select id="setTheme"></select>
                   </label>
                   <label class="inline-field">反馈语言
-                    <select id="setLang">
-                      <option value="zh">中文</option>
-                      <option value="en">English</option>
-                    </select>
+                    <select id="setLang"></select>
                   </label>
                 </div>
-                <p class="hint">主题在这里保存后，头部那颗「主题」按钮只做快速循环（点一下即存）；反馈语言没有快捷入口，这里存的是默认值，学习与复习面板的工具栏可以单独改本轮的语言。</p>
+                <p class="hint">头部那颗「主题」按钮只做快速循环，点一下即存。反馈语言存的是默认值，学习与复习的工具栏可以单独改本轮。</p>
               </fieldset>
 
               <fieldset>
@@ -207,7 +194,7 @@
                   </label>
                   <label class="check"><input id="setLan" type="checkbox" /> 允许局域网访问</label>
                 </div>
-                <p class="hint">这两项保存后要重启服务才生效（关掉服务窗口，再双击 VocabApp.bat）。勾上局域网访问后，同一 Wi-Fi 下的设备用 <code>http://本机IP:端口</code> 打开；本服务没有密码，只在你信任的网络里开。</p>
+                <p class="hint">这两项要重启服务才生效（关掉服务窗口，再双击 VocabApp.bat）。开了局域网访问，同一 Wi-Fi 下的设备用 <code>http://本机IP:端口</code> 打开；本服务没有密码，只在你信任的网络里开。</p>
               </fieldset>
 
               <fieldset>
@@ -215,7 +202,7 @@
                 <div class="row">
                   <label class="inline-field">默认模型 <select id="setModel" data-no-empty="1"></select></label>
                 </div>
-                <p class="hint">下面这组是「新增候选」：模型名与接入点必填，密钥从 <code>.env</code> 里已有的名字里挑，填好点「添加」再加入候选。</p>
+                <p class="hint">新增候选：模型名与接入点必填，密钥从 <code>.env</code> 里已有的名字里挑，填好点「添加」再加入候选。</p>
                 <div class="row">
                   <input id="newModel" type="text" placeholder="模型名，如 glm-4.5" />
                   <input id="newModelUrl" type="text" placeholder="接入点 https://…（必填）" />
@@ -245,8 +232,8 @@
                   <span id="testResult" class="save-state"></span>
                 </div>
                 <p class="hint" id="modelHint">
-                  模型全部平级地保存在 <code>settings.json</code>（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数，
-                  没有 .env 默认接入点。<code>.env</code> 只放密钥：
+                  模型全部平级地保存在 <code>settings.json</code>（「添加」后记得「保存设置」），每个模型自带接入点、密钥名与可选附加参数。
+                  <code>.env</code> 只放密钥：
                   每把密钥用 <code>VOCAB_KEY_名字=…</code> 声明，界面只选名字、不读取也不写入密钥值。改了
                   <code>.env</code> 要重启服务才会生效。
                 </p>
@@ -268,7 +255,7 @@
                   <button type="button" class="btn ghost reset-prompt" data-prompt="judge">恢复默认</button>
                   <code class="contract" id="contractJudge"></code>
                 </div>
-                <p class="hint">清空文本域等于恢复默认。契约行（JSON 结构、字段名、枚举）永远追加在最后，改不掉。生成例句与定档（复判）这两路的提示词不在设置里，不提供覆盖。</p>
+                <p class="hint">清空文本域就是恢复默认。契约行（JSON 结构、字段名、枚举）永远追加在最后。生成例句与定档两路的提示词写死在服务端，这里改不到。</p>
               </fieldset>
 
               <div class="row">

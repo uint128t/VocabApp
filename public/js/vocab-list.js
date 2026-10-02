@@ -1,13 +1,13 @@
 // 词表面板：统计与侧栏概览、列表渲染、就地编辑、复选与批量操作、重构建议面板、
 // 以及条目右下角的「考这个词」。
 
-import { $, CEFR, state, api, toast, text, fillSelect, inChunks, usageMeter, estimate } from './core.js';
+import { $, CEFR, state, api, toast, report, text, fillSelect, fillOptions, LABELS, inChunks, usageMeter, estimate, fitChrome, activateTab, prefs } from './core.js';
 import { senseRow, readSenses, levelSourceLine, answerRow, voteAll, applyVote } from './sense-ui.js';
 import { levelCard } from './level-card.js';
-import { settings } from './settings-panel.js';
 
-// 掌握状态三档的说法只有这一处：标签、筛选、行内文案都从这里取。
-const MASTERY_TEXT = { full: '完全掌握', partial: '部分掌握', none: '不掌握' };
+// 掌握状态三档的说法在 core 的 LABELS.mastery 一处；筛选下拉也按它填。
+const MASTERY_TEXT = LABELS.mastery;
+fillOptions($('#mastery'), MASTERY_TEXT, '掌握状态');
 
 function visibleEntries() {
   const q = $('#q').value.trim().toLowerCase();
@@ -86,25 +86,9 @@ function renderStats() {
     ovRow(`已掌握义项 ${n.checked} / ${n.total}`),
     ovBar([['', n.checked]], n.total),
   );
-  // 系统字体放大时（安卓实测 1.3×）5 个导航项加概览会挤不下：与其让顶部条内部横滚，
-  // 不如按实测溢出收起概览——和 ≤360px 的处理一致，只是由「真的放不下」驱动而不是断点。
-  syncNavFit();
+  // 概览的字数变了，顶栏那两条的占位跟着变（概览是同行的一份子）：重新量一遍。
+  fitChrome();
 }
-
-function syncNavFit() {
-  const side = document.querySelector('.side');
-  if (!side) return;
-  const narrow = matchMedia('(max-width: 920px)').matches;
-  if (!narrow) {
-    document.documentElement.classList.remove('nav-compact');
-    return;
-  }
-  // 先清掉标记再量：量的是「概览还在时」的真实占用
-  document.documentElement.classList.remove('nav-compact');
-  if (side.scrollWidth > side.clientWidth + 1) document.documentElement.classList.add('nav-compact');
-}
-
-window.addEventListener('resize', syncNavFit);
 
 function editForm(entry, li) {
   const form = document.createElement('div');
@@ -114,7 +98,7 @@ function editForm(entry, li) {
   list.className = 'sense-list';
   const senses = entry.senses.map((s, i) =>
     i === 0 && !s.definition && !s.chinese && entry.definition
-      ? { ...s, definition: entry.definition, checked: s.checked === undefined ? entry.mastery === 'full' : s.checked }
+      ? { ...s, definition: entry.definition, checked: s.checked }
       : s,
   );
   for (const sense of senses) list.append(senseRow(entry, sense, { withCheck: true }));
@@ -467,7 +451,7 @@ function wordCheckCard(e, li) {
             sense: row.api.sense,
             userDefinition: row.api.input.value.trim(),
             userExample: row.api.exampleInput.value.trim(),
-            lang: settings ? settings.lang : 'zh',
+            lang: prefs.lang,
           }),
         });
         if (res.pass) passes += 1;
@@ -832,7 +816,7 @@ function openRefactorPanel(entries) {
   });
   const say = (extra) => {
     const ready = slots.filter((s) => s.item).length;
-    head.textContent = `重构建议 ${ready}/${slots.length} 个词 · 预计 ${expected.text} · 勾选后一次写盘，写盘前自动备份${
+    head.textContent = `重构建议 ${ready}/${slots.length} 个词 · 预计 ${expected} · 勾选后一次写盘，写盘前自动备份${
       extra ? ` · ${extra}` : ''
     }`;
   };
@@ -848,8 +832,7 @@ function openRefactorPanel(entries) {
   apply.addEventListener('click', async () => {
     const chosen = slots.filter((s) => s.pick.checked && s.item);
     if (!chosen.length) {
-      result.textContent = '没有勾选任何词';
-      result.className = 'save-state bad';
+      report(result, '没有勾选任何词', true);
       return;
     }
     const payload = chosen.map((s) => ({ word: s.item.word, senses: s.item.senses, checked: s.item.checked }));
@@ -862,8 +845,7 @@ function openRefactorPanel(entries) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ items: payload }),
       });
-      result.textContent = `已重构 ${out.changed} 条${out.failed.length ? ` · 跳过 ${out.failed.length}` : ''}${out.backup ? ` · 备份 ${out.backup}` : ''}`;
-      toast(`已重构 ${out.changed} 条${out.backup ? ` · 备份 ${out.backup}` : ''}`);
+      report(result, `已重构 ${out.changed} 条${out.failed.length ? ` · 跳过 ${out.failed.length}` : ''}${out.backup ? ` · 备份 ${out.backup}` : ''}`);
       selected.clear();
       await loadEntries();
       // 写过的那些从清单里摘掉，剩下的继续摆着。
@@ -876,8 +858,7 @@ function openRefactorPanel(entries) {
       }
       say('');
     } catch (e) {
-      result.textContent = `写入失败：${e.message}`;
-      result.className = 'save-state bad';
+      report(result, `写入失败：${e.message}`, true);
     }
     apply.disabled = false;
   });
@@ -938,7 +919,7 @@ function renderLevelPanel(res) {
   const head = document.createElement('p');
   head.className = 'quiz-hint';
   const plan = estimate({ senses: total });
-  head.textContent = `档位复判 ${res.items.length} 个词 / ${total} 条义项（每条三票，预计 ${plan.text}）：默认全勾；展开每条的依据能看每一步命中了什么。`;
+  head.textContent = `档位复判 ${res.items.length} 个词 / ${total} 条义项（每条三票，预计 ${plan}）：默认全勾；展开每条的依据能看每一步命中了什么。`;
   panel.append(head);
 
   const actions = document.createElement('div');
@@ -1095,8 +1076,8 @@ function renderLevelPanel(res) {
     }
     done.textContent = '';
     if (!left) {
-      status.textContent = `复判完成 · ${ok} 条档位会变`;
-      status.className = 'save-state';
+      // 跑完的收尾只弹一次（跑完的条数与「还剩几条」不同：后者是在等他点继续，留在原地）
+      report(status, `复判完成 · ${ok} 条档位会变`);
     } else {
       more.hidden = false;
       status.textContent = stopped
@@ -1112,8 +1093,7 @@ function renderLevelPanel(res) {
     // 清单里的现状，一次写盘一份备份。
     const picked = chosen();
     if (!picked.length) {
-      done.textContent = '没有勾选任何有结果的义项';
-      done.className = 'save-state bad';
+      report(done, '没有勾选任何有结果的义项', true);
       return;
     }
     const byWord = new Map();
@@ -1137,8 +1117,7 @@ function renderLevelPanel(res) {
       item.senses[r.index].level = r.to;
     }
     if (!changedWords.size) {
-      done.textContent = '没有档位变化，未写盘';
-      done.className = 'save-state';
+      report(done, '没有档位变化，未写盘');
       return;
     }
     const items = [...byWord.values()].filter((item) => changedWords.has(item.word));
@@ -1151,7 +1130,11 @@ function renderLevelPanel(res) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ items }),
       });
-      toast(`档位已重定 ${out.changed} 个词${out.backup ? ` · 备份 ${out.backup}` : ''}`);
+      report(
+        done,
+        `档位已重定 ${out.changed} 个词${out.failed.length ? ` · 跳过 ${out.failed.length}` : ''}${out.backup ? ` · 备份 ${out.backup}` : ''}`,
+        out.failed.length > 0,
+      );
       selected.clear();
       await loadEntries();
       if (!out.failed.length) {
@@ -1159,11 +1142,8 @@ function renderLevelPanel(res) {
         closePanel();
         return;
       }
-      done.textContent = `已写回 ${out.changed} 个词 · 跳过 ${out.failed.length}`;
-      done.className = 'save-state bad';
     } catch (e) {
-      done.textContent = `写入失败：${e.message}`;
-      done.className = 'save-state bad';
+      report(done, `写入失败：${e.message}`, true);
     }
     // 还有没写成的：面板留着，按钮放行，好让你改完再写一次。
     commit.disabled = false;
@@ -1317,16 +1297,18 @@ async function refactorSelection() {
     }
     const ready = results.filter((r) => r.ok).length;
     panel.say(stopped ? '上一轮中途终止' : '');
-    out.textContent = `${
-      stopped
-        ? `已终止 · 跑完 ${ready}/${words.length} 个词`
-        : ready
-          ? `本轮完成 ${ready}/${words.length}`
-          : '没有拿到任何建议'
-    }${meter.text()}`;
+    report(
+      out,
+      `${
+        stopped
+          ? `已终止 · 跑完 ${ready}/${words.length} 个词`
+          : ready
+            ? `本轮完成 ${ready}/${words.length}`
+            : '没有拿到任何建议'
+      }${meter.text()}`,
+    );
   } catch (e) {
-    out.textContent = `重构失败：${e.message}`;
-    toast(`重构失败：${e.message}`, 'bad');
+    report(out, `重构失败：${e.message}`, true);
   } finally {
     meter?.stop();
     refactorStop = null;
@@ -1350,10 +1332,11 @@ async function levelPlan() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ words }),
     });
-    out.textContent = res.missing.length ? `${res.missing.length} 个词在词表里查不到，已跳过` : '';
+    if (res.missing.length) report(out, `${res.missing.length} 个词在词表里查不到，已跳过`);
+    else out.textContent = '';
     renderLevelPanel(res);
   } catch (e) {
-    out.textContent = `读取失败：${e.message}`;
+    report(out, `读取失败：${e.message}`, true);
   } finally {
     // 别在这里直接点亮：清单已经摆出来了，这个按钮得跟着 panelLock 一起关着。
     syncSelection();
@@ -1390,4 +1373,15 @@ for (const id of ['#q', '#chapter', '#difficulty', '#mastery']) {
 
 $('#reload').addEventListener('click', loadEntries);
 
-export { renderList, loadEntries };
+// 加词卡片上的「定位到词表」走这里：筛选框与列表是本面板的 DOM，别的面板不直接动它们。
+function locateWord(word) {
+  activateTab('fill');
+  $('#chapter').value = '';
+  $('#difficulty').value = '';
+  $('#mastery').value = '';
+  $('#q').value = word;
+  renderList();
+  document.querySelector('#list li')?.scrollIntoView({ block: 'center' });
+}
+
+export { renderList, loadEntries, locateWord };

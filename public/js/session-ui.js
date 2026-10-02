@@ -3,10 +3,9 @@
 // 所以这里按前缀取元素、按 mode 决定这轮属于谁。面板模块自己挂工具栏的监听。
 
 // state 在这里改名引入：下面几个渲染函数都把「本轮状态」当参数叫 state，同名会把它遮住。
-import { $, api, toast, state as listState } from './core.js';
+import { $, api, toast, state as listState, prefs, LABELS, fillOptions, PANEL_TITLE } from './core.js';
 import { answerRow, levelTag } from './sense-ui.js';
 import { loadEntries } from './vocab-list.js';
-import { settings } from './settings-panel.js';
 
 const REFS = ['Start', 'Pause', 'Resume', 'Abort', 'Restart', 'Lang', 'Count', 'CountNum', 'Progress', 'Card', 'Feedback', 'Result'];
 
@@ -43,7 +42,6 @@ const REASON_TEXT = {
   },
 };
 
-const MODE_LABEL = { learn: '学习', review: '复习' };
 
 // 一轮是全局的（同一时刻只有一轮），所以两个面板都挂在这里，动作完了一起刷。
 const mounted = [];
@@ -58,6 +56,7 @@ export function mountRound({ prefix, mode }) {
     return el;
   };
   const r = Object.fromEntries(REFS.map((name) => [name[0].toLowerCase() + name.slice(1), ref(name)]));
+  fillOptions(r.lang, LABELS.lang);
   const countKey = `vocab-count-${mode}`;
 
   // 抽词滑块：上限跟着池子走（复习抽「掌握过一些」的，学习抽「还有义项没掌握」的——部分掌握两边都算），
@@ -132,7 +131,7 @@ export function mountRound({ prefix, mode }) {
     const done = `已判 ${plan.judged}/${plan.total} 条义项`;
     if (state.mode !== mode) {
       // 只有那一轮还在跑才在这里提醒；整轮都判完了就说去结算，别再说「接着做」。
-      const label = MODE_LABEL[state.mode];
+      const label = PANEL_TITLE[state.mode];
       r.progress.textContent =
         plan.total > 0 && plan.judged === plan.total
           ? `${label}模式的那一轮已经判完（${done}），去「${label}」面板结算`
@@ -156,7 +155,7 @@ export function mountRound({ prefix, mode }) {
     // 本轮的语言以服务端记的为准；没有本轮时回到设置里的默认值。这一格归这个面板管——
     // 设置页保存后只负责触发刷新，不直接改它，否则会把这轮正用着的语言悄悄换掉。
     if (state && mine) r.lang.value = state.lang;
-    else if (settings) r.lang.value = settings.lang;
+    else r.lang.value = prefs.lang;
   }
 
   // 看词段：整词的义项与例句摊开，一次一个词。
@@ -429,7 +428,7 @@ export function mountRound({ prefix, mode }) {
       return;
     }
 
-    head.textContent = `${MODE_LABEL[mode]}本轮共 ${plan.total} 条义项，已判 ${plan.judged} 条${
+    head.textContent = `${PANEL_TITLE[mode]}本轮共 ${plan.total} 条义项，已判 ${plan.judged} 条${
       current ? '，可以接着做，也可以随时结算已完成的部分' : '，核对清单后结算'
     }`;
     box.append(head);
@@ -576,7 +575,7 @@ export function mountRound({ prefix, mode }) {
       });
       pending.clear();
       renderFeedback(null);
-      toast(force ? `已放弃旧的并重开一轮${MODE_LABEL[mode]}` : `${MODE_LABEL[mode]}轮次开始`);
+      toast(force ? `已放弃旧的并重开一轮${PANEL_TITLE[mode]}` : `${PANEL_TITLE[mode]}轮次开始`);
       await refreshAll();
     } catch (e) {
       toast(e.message, 'bad');

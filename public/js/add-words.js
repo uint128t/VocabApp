@@ -1,8 +1,8 @@
 // 加词面板：粘贴一批词 → 逐词出卡 → 校对后写入。
 
-import { $, api, toast, activateTab, inChunks, usageMeter, estimate } from './core.js';
+import { $, api, toast, inChunks, usageMeter, estimate } from './core.js';
 import { senseRow, readSenses, voteAll, applyVote } from './sense-ui.js';
-import { renderList, loadEntries } from './vocab-list.js';
+import { loadEntries, locateWord } from './vocab-list.js';
 
 function parseWords(text) {
   const seen = new Set();
@@ -118,7 +118,7 @@ async function draftWords() {
   const hint = $('#addHint');
   // 一个词一次生成 + 它的义项各三票；义项数还没生成出来，按全表均值 1.4 条先估。
   const plan = estimate({ entries: fresh.length, senses: Math.round(fresh.length * 1.4) });
-  hint.textContent = `${fresh.length} 个待生成${words.length - fresh.length ? `，${words.length - fresh.length} 个已有卡片` : ''} · 预计 ${plan.text}`;
+  hint.textContent = `${fresh.length} 个待生成${words.length - fresh.length ? `，${words.length - fresh.length} 个已有卡片` : ''} · 预计 ${plan}`;
   if (!fresh.length) return;
 
   const btn = $('#draftBtn');
@@ -255,16 +255,6 @@ async function commitAllCards() {
   }
   if (written) await loadEntries();
   toast(`已写入 ${written} 条${skipped.length ? ` · 未写入 ${skipped.length} 条：${skipped.join('、')}` : ''}`, skipped.length ? 'bad' : 'ok');
-}
-
-function locateWord(word) {
-  activateTab('fill');
-  $('#chapter').value = '';
-  $('#difficulty').value = '';
-  $('#mastery').value = '';
-  $('#q').value = word;
-  renderList();
-  document.querySelector('#list li')?.scrollIntoView({ block: 'center' });
 }
 
 $('#draftBtn').addEventListener('click', draftWords);

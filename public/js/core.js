@@ -6,6 +6,10 @@ const CEFR = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 
 const state = { entries: [], stats: null };
 
+// 跨面板共享的设定值，目前只有反馈语言的默认值：设置面板写它，词表与两个轮次面板读它。
+// 走这里而不是 import 设置面板——面板之间不互相引，方向才是单向的。
+const prefs = { lang: 'zh' };
+
 async function api(path, init) {
   const res = await fetch(path, init);
   const body = await res.json().catch(() => ({}));
@@ -67,25 +71,23 @@ async function inChunks(items, worker, onProgress, signal) {
 // 一次定档摆几条（D37，用户定的）。批越小越保险、批越大固定开销摊得越薄。
 const VOTE_BATCH = 8;
 
-// 三种调用的实测单价（token）：定档一票 ≈106、生成义项一个词 ≈590、判定一次 ≈380。
-// 2026-10-01 按 deepseek 关掉推理段之后测的（关之前是 456 / 1900 / 450）。定档那一项拿真机反推
-// 校准过：全表 906 条重判花掉 287.7k token，287700 / (906×3) ≈ 106，比单批实测的 96 略高——
-// 真跑起来有重排队、还有不满批的尾巴。换个模型、或者哪天把推理段重新打开，这几个数就不作数了。
-// 只用来在开跑之前报个量级，真账看 /api/usage。重构那一路的预估会偏高：D38 会跳过释义没变的
-// 义项（真机是 589 词 475.8k，估算报 634k），估算器不知道有多少条会真的变。
-const COST = { vote: 106, entry: 590, judge: 380 };
+// 两种调用的实测单价（token）：定档一票 ≈106、生成义项一个词 ≈590。2026-10-01 按 deepseek 关掉
+// 推理段之后测的；定档那一项拿真机反推校准过（全表 906 条重判 287.7k ÷ (906×3) ≈ 106）。换个模型、
+// 或者哪天把推理段重新打开，这几个数就不作数了。只用来在开跑前报个量级，真账看 /api/usage。
+const COST = { vote: 106, entry: 590 };
 
+// token 数按人读的位数说：1500 → 1.5k，1200000 → 1.20M。
 function tokens(n) {
   return n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-// 按「有多少词、多少条义项要跑」估一下：返回 {calls, tokens, text}。
-// 定档按批算调用数（一批 8 条、跑三遍），生成义项暂时还是一个词一次。
-function estimate({ entries = 0, senses = 0, judges = 0 } = {}) {
-  const votes = senses * 3;
-  const calls = entries + Math.ceil(senses / VOTE_BATCH) * 3 + judges;
-  const total = entries * COST.entry + votes * COST.vote + judges * COST.judge;
-  return { calls, tokens: total, text: `约 ${calls} 次调用 · ${tokens(total)} token` };
+// 按「有多少词、多少条义项要跑」估一句：`约 N 次调用 · X token`。定档按批算调用数（一批 8 条、
+// 跑三遍），生成义项是一个词一次。重构那一路会偏高——D38 跳过释义没变的义项，估算器不知道有
+// 多少条真会变。
+function estimate({ entries = 0, senses = 0 } = {}) {
+  const calls = entries + Math.ceil(senses / VOTE_BATCH) * 3;
+  const total = entries * COST.entry + senses * 3 * COST.vote;
+  return `约 ${calls} 次调用 · ${tokens(total)} token`;
 }
 
 // 用量表：批量跑起来 token 走得飞快，进度行里顺带把这轮的用量写上——看得见才好决定要不要收手。
@@ -111,6 +113,17 @@ function usageMeter() {
   };
 }
 
+// 收尾的结果只弹右下角、原地那一格清干净：页面上只留「进行中」和「等你动手」的状态，
+// 结果不留痕（他的口径：结果只走弹窗，不要原地反馈）。传的必须是 .save-state 那类状态格。
+function report(el, message, bad = false) {
+  for (const node of Array.isArray(el) ? el : [el]) {
+    if (!node) continue;
+    node.textContent = '';
+    node.className = 'save-state';
+  }
+  toast(message, bad ? 'bad' : 'ok');
+}
+
 let toastTimer;
 function toast(message, kind = 'ok') {
   const el = $('#toast');
@@ -121,6 +134,99 @@ function toast(message, kind = 'ok') {
   toastTimer = setTimeout(() => {
     el.hidden = true;
   }, 4000);
+}
+
+// ---- 防横滚 ----
+// 一行真正占多宽：scrollWidth 只算右/下方向的溢出，而右对齐的行（顶栏工具条）塞不下时内容往
+// 左跑、scrollWidth 一点不长——所以不换行的行再按「子元素总宽 + 间隙」量一遍，取大者。
+function naturalWidth(el) {
+  const cs = getComputedStyle(el);
+  const widest = el.scrollWidth;
+  if (cs.flexWrap !== 'nowrap') return widest;
+  const gap = parseFloat(cs.columnGap) || 0;
+  // 只数量得到的那些：display:none 的子元素不占位，给它也算一道间隙会把行系统性量宽几像素，
+  //  borderline 的字号下就是一次误压
+  const vis = [...el.children].filter((kid) => getComputedStyle(kid).display !== 'none');
+  const total = vis.reduce((w, kid) => w + kid.offsetWidth, 0) + gap * Math.max(0, vis.length - 1);
+  return Math.max(widest, total);
+}
+
+// 判据只有这一条：真实溢出——占宽超过 clientWidth。它跟字号、系统字体缩放、文案长短、语言都
+// 无关，量的是当下真实的占位（窄屏那几轮栽的都是「看着没问题、量出来超了」，所以一律用量出来
+// 的数判断，不靠断点猜）。
+function overflows(el) {
+  return Boolean(el) && naturalWidth(el) > el.clientWidth + 1;
+}
+
+// 处置：溢出就把这一行的字号压回去。行内字号写在 CSS 里、写成 calc(基准 * var(--fit, 1))，
+// 这里只改 --fit：先按比例一步算到刚好塞下，再逐步微调；压到下限还塞不下返回 false，交给
+// 调用方兜底（收起次要内容）。没溢出就把 --fit 复位——视口一大、内容一短，字号自己回来。
+function fitRow(el, { floor = 0.8 } = {}) {
+  if (!el) return true;
+  el.style.removeProperty('--fit');
+  if (!overflows(el)) return true;
+  let fit = Math.max(floor, (el.clientWidth - 1) / naturalWidth(el));
+  for (let i = 0; i < 20 && overflows(el) && fit > floor; i += 1) fit = Math.max(floor, fit - 0.02);
+  el.style.setProperty('--fit', fit.toFixed(3));
+  return !overflows(el);
+}
+
+// 顶栏那两条每次视口或内容变了都过一遍。右侧工具条：量到溢出就压字号（不截省略号）。
+// 窄屏下导航那一行还是原来的判断——真放不下就收起概览（它同时管着顶栏高度，缩字代替它不划算）。
+// 处置只认「连着两帧都溢出」：替换完词表那一瞬布局还没落定（系统文件选择器刚收回去尤其明显），
+// 单帧量到的溢出会把压好的字号钉在页面上——症状就是「工具条突然缩小，再打开又恢复正常」。
+let overflowSeen = false;
+
+function fitChrome() {
+  const tools = $('.topbar-tools');
+  const side = $('.side');
+  const narrow = Boolean(side) && matchMedia('(max-width: 920px)').matches;
+  if ((overflows(tools) || (narrow && overflows(side))) && !overflowSeen) {
+    overflowSeen = true;
+    requestAnimationFrame(fitChrome);
+    return;
+  }
+  overflowSeen = false;
+  fitRow(tools);
+  if (!side) return;
+  document.documentElement.classList.remove('nav-compact');
+  if (narrow && overflows(side)) document.documentElement.classList.add('nav-compact');
+}
+
+window.addEventListener('resize', fitChrome);
+
+// ---- 把一份文件交给用户 ----
+// 桌面就是浏览器下载；安卓 App 里主界面（http://127.0.0.1:端口）那个 WebView 没有插件桥，
+// 写文件与系统分享只能交给自家桥页去做（storage.html?mode=share，D50）——那里自己去内嵌服务
+// 取同一份内容，所以只传地址，不过手搬文本（词表上百 KB）。
+// 这两条事实由 settings-panel 读到 /api/settings 后写一次：
+//  · inApp——宿主是安卓 App。判据用平台，不用「有没有 Capacitor 对象」：主界面里那个对象压根
+//    不存在，拿它判断等于永远判成桌面，导出在手机上就成了点了没反应的那颗按钮。
+//  · local——页面就在运行服务这台机器上开（回环）。设备包的密钥只有回环请求拿得走（D46），
+//    导出成功与否要说给他听，看的正是这个。
+const deployment = { inApp: false, local: true };
+
+function setDeployment({ inApp, local } = {}) {
+  if (inApp !== undefined) deployment.inApp = Boolean(inApp);
+  if (local !== undefined) deployment.local = Boolean(local);
+}
+
+const runningInApp = () => deployment.inApp;
+const loopback = () => deployment.local;
+
+function deliverFile(name, url) {
+  if (deployment.inApp) {
+    const src = new URL(url, location.href).href;
+    const back = `${location.origin}/?ptab=settings`;
+    location.href = `https://localhost/storage.html?mode=share&name=${encodeURIComponent(name)}&src=${encodeURIComponent(src)}&back=${encodeURIComponent(back)}`;
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
 }
 
 function text(...parts) {
@@ -144,12 +250,41 @@ function fillSelect(sel, values, current) {
   if (current && values.includes(current)) sel.value = current;
 }
 
-const PANEL_TITLE = { add: '加词', fill: '词表', learn: '学习', review: '复习', settings: '设置' };
+// 下拉与标签里的说法只有这一处：HTML 里只留空壳，各面板启动时按这几张表填自己的 select。
+const LABELS = {
+  lang: { zh: '中文', en: 'English' },
+  mastery: { full: '完全掌握', partial: '部分掌握', none: '不掌握' },
+  theme: { auto: '跟随系统', light: '浅色', dark: '深色' },
+  // 顶栏那颗按钮用短版：「跟随系统」比「浅色/深色」宽两个汉字，系统字体一放大就把顶栏顶出横滚。
+  themeBtn: { auto: '自动', light: '浅色', dark: '深色' },
+};
+
+// 按 {值: 文字} 填一个 select；placeholder 是那条空值选项（筛选框要用）。
+function fillOptions(sel, map, placeholder) {
+  sel.innerHTML = '';
+  if (placeholder !== undefined) {
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = placeholder;
+    sel.append(all);
+  }
+  for (const [value, label] of Object.entries(map)) {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = label;
+    sel.append(o);
+  }
+}
+
+// 面板名只有一处来源：侧栏导航上那几项的标题文字。顶栏标题与学习/复习的文案都从这里取。
+const PANEL_TITLE = Object.fromEntries(
+  [...document.querySelectorAll('.nav-item')].map((t) => [t.dataset.panel, t.querySelector('span').textContent.trim()]),
+);
 
 function activateTab(panel) {
   for (const t of document.querySelectorAll('.nav-item')) t.classList.toggle('active', t.dataset.panel === panel);
   for (const p of document.querySelectorAll('.panel')) p.classList.toggle('active', p.id === `panel-${panel}`);
-  $('#panelTitle').textContent = PANEL_TITLE[panel] || 'Vocabulary 助手';
+  $('#panelTitle').textContent = PANEL_TITLE[panel] || 'VocabApp';
   // 切面板是换地方干活，不是接着刚才的滚动位置往下看；留在原处只会落在新面板的半腰上。
   window.scrollTo(0, 0);
 }
@@ -158,4 +293,28 @@ for (const tab of document.querySelectorAll('.nav-item')) {
   tab.addEventListener('click', () => activateTab(tab.dataset.panel));
 }
 
-export { $, CEFR, state, api, toast, text, fillSelect, activateTab, inChunks, usageMeter, estimate, tokens, VOTE_BATCH };
+export {
+  $,
+  CEFR,
+  state,
+  prefs,
+  api,
+  toast,
+  report,
+  text,
+  fillSelect,
+  fillOptions,
+  LABELS,
+  PANEL_TITLE,
+  activateTab,
+  inChunks,
+  usageMeter,
+  estimate,
+  tokens,
+  fitChrome,
+  deliverFile,
+  setDeployment,
+  runningInApp,
+  loopback,
+  VOTE_BATCH,
+};

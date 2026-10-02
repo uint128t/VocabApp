@@ -1,12 +1,8 @@
 // 设备迁移（D46）：导出「密钥 + 设置 + 词表」为一个 .vocabpack.json；导入时逐块和本机比对——
 // 一样跳过、单边直接搬、两边都有且不同就把两版并排摆出来（词表按章节、设置按字段、密钥按名字），
-// 让用户逐项选。冲突未全部拍板前，「应用选择」保持禁用。
+// 让用户逐项选。冲突未全部拍板前，「应用选择」保持禁用。词表路径不参与——各设备各自一份。
 
-import { $, api, toast } from './core.js';
-
-// Capacitor 的插件挂在全局对象上：这个前端没有打包器，裸模块名 import 在 WebView 里解析不了（D45 教训）
-const plugins = () => (window.Capacitor && window.Capacitor.Plugins) || {};
-const isNative = () => Boolean(plugins().Filesystem && plugins().Share);
+import { $, api, report, deliverFile, runningInApp, loopback } from './core.js';
 
 let reload = async () => {}; // 由 settings-panel 接进来：重读设置、词表与轮次面板
 
@@ -15,61 +11,17 @@ export function initMigrate(deps) {
 }
 
 // ---------------------------------------------------------------------------
-// 导出
+// 导出：整份设备包（密钥 + 设置 + 词表）由服务端一次拼好（D50），这里只负责把那份文件交出去
+// ——桌面是浏览器下载，手机上跳桥页走系统分享（应用里的主界面没有插件桥，`<a download>` 点了
+// 不会有任何反应）。密钥只有回环请求拿得走，拿不走时包照样导，但要如实说清楚。
 
-async function exportPack() {
+function exportPack() {
   const out = $('#packState');
   out.textContent = '导出中…';
   out.className = 'save-state';
-  try {
-    const [pack, vocabText] = await Promise.all([
-      api('/api/migrate/export').catch((e) => {
-        // LAN 上访问的桌面服务会 403：那台机器不让你导密钥，但设置/词表仍可导
-        if (e.status === 403) return { keys: {}, settings: null, localOnly: true };
-        throw e;
-      }),
-      fetch('/api/vocab/export').then((r) => r.text()),
-    ]);
-    const device = navigator.userAgent.includes('Android') ? 'android' : 'desktop';
-    const payload = {
-      kind: 'vocabapp-pack',
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      device,
-      keys: pack.keys || {},
-      settings: pack.settings,
-      vocabText,
-    };
-    const name = `vocab-device-${device}-${new Date().toISOString().slice(0, 10)}.vocabpack.json`;
-    await deliverFile(name, JSON.stringify(payload, null, 2));
-    out.textContent = pack.localOnly
-      ? '已导出（这台机器不让取密钥，包里只有设置与词表）'
-      : `已导出 ${name}`;
-    out.className = pack.localOnly ? 'save-state bad' : 'save-state';
-    if (!pack.localOnly) toast(`设备包已导出：${name}`);
-  } catch (e) {
-    out.textContent = `导出失败：${e.message}`;
-    out.className = 'save-state bad';
-  }
-}
-
-// 把一份文本交给用户：移动版写进 App 目录再弹系统分享；桌面浏览器直接下载。
-async function deliverFile(name, text) {
-  if (isNative()) {
-    const { Filesystem, Share } = plugins();
-    await Filesystem.writeFile({ path: name, data: text, directory: 'CACHE', encoding: 'UTF-8' });
-    const { uri } = await Filesystem.getUri({ path: name, directory: 'CACHE' });
-    await Share.share({ title: name, files: [uri] });
-    return;
-  }
-  const blob = new Blob([text], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  const name = `vocab-device-${runningInApp() ? 'android' : 'desktop'}-${new Date().toISOString().slice(0, 10)}.vocabpack.json`;
+  deliverFile(name, '/api/migrate/export');
+  report(out, `设备包已导出：${name}${loopback() ? '' : '（这台机器不让取密钥，包里只有设置与词表）'}`, !loopback());
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +42,7 @@ async function importPack(file) {
   try {
     if (file.size > 8_000_000) throw new Error('文件超过 8MB，不像是一份设备包');
     const pack = JSON.parse(await file.text());
-    if (pack?.kind !== 'vocabapp-pack') throw new Error('这不是 Vocabulary 助手导出的设备包');
+    if (pack?.kind !== 'vocabapp-pack') throw new Error('这不是 VocabApp 导出的设备包');
     out.textContent = '比对中…';
     const res = await api('/api/migrate/import', {
       method: 'POST',
@@ -100,8 +52,7 @@ async function importPack(file) {
     out.textContent = '';
     renderCompare(box, pack, res);
   } catch (e) {
-    out.textContent = `读取失败：${e.message}`;
-    out.className = 'save-state bad';
+    report(out, `读取失败：${e.message}`, true);
   }
 }
 
@@ -355,15 +306,10 @@ function renderSettings(box) {
     row.append(vals);
 
     if (f.state === 'conflict') {
-      // 词表路径两边天然不同（各设备各自一份），默认保留本机
-      const critical = f.field === 'vocabFile';
-      if (critical) {
-        state.choices.set(`setting:${f.field}`, 'local');
-      }
       row.append(pickRow(`setting-${f.field}`, '用本机', '用远端', { key: `setting:${f.field}` }));
     } else {
-      // 单边：默认采用有值的那一边（本机为空时就是远端，反之亦然）
-      const takeRemote = f.localValue === null;
+      // 单边：该采用哪边由服务端判好（空数组、全 null 的提示词也算空），前端只照着摆
+      const takeRemote = Boolean(f.takeRemote);
       const l = document.createElement('label');
       l.className = 'row-inline';
       const c = document.createElement('input');
@@ -507,7 +453,7 @@ async function applyChoices(apply, note) {
   if (Object.keys(settingsPatch).length) payload.settings = settingsPatch;
   if (Object.keys(keysPatch).length) payload.keys = keysPatch;
   if (!Object.keys(payload).length) {
-    note.textContent = '选择结果和本机没有差别，未写盘';
+    report(note, '选择结果和本机没有差别，未写盘');
     return;
   }
   apply.disabled = true;
@@ -524,14 +470,12 @@ async function applyChoices(apply, note) {
     if (res.settings) bits.push('设置已合并');
     if (res.keys) bits.push(`密钥 ${res.keys.length} 把`);
     const restart = payload.settings && ('port' in settingsPatch || 'lanAccess' in settingsPatch);
-    toast(`已从设备包应用：${bits.join('、')}${restart ? ' · 端口/访问范围重启后生效' : ''}`);
-    $('#packState').textContent = `已应用：${bits.join('、')}${restart ? '（端口/访问范围重启后生效）' : ''}`;
+    report([note, $('#packState')], `已从设备包应用：${bits.join('、')}${restart ? ' · 端口/访问范围重启后生效' : ''}`);
     $('#packResult').hidden = true;
     $('#packResult').innerHTML = '';
     await reload();
   } catch (e) {
-    note.textContent = `写入失败：${e.message}`;
-    note.className = 'save-state bad';
+    report(note, `写入失败：${e.message}`, true);
     apply.disabled = false;
   }
 }

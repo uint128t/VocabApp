@@ -1,32 +1,29 @@
 // 设置面板与主题：模型候选、提示词、主题循环、打开配置文件、设备迁移。
 
-import { $, api, toast, fillSelect, activateTab } from './core.js';
+import { $, api, toast, report, fillSelect, fillOptions, LABELS, activateTab, deliverFile, setDeployment, runningInApp, prefs } from './core.js';
 import { initMigrate } from './migrate.js';
 
-function fillModelSelect(models, current) {
-  const sel = $('#model');
-  sel.innerHTML = '';
-  for (const m of models) {
-    const o = document.createElement('option');
-    o.value = m;
-    o.textContent = m;
-    sel.append(o);
-  }
-  sel.value = current;
-}
-
 const THEME_KEY = 'vocab-theme';
-const THEME_LABEL = { auto: '跟随系统', light: '浅色', dark: '深色' };
-// 顶栏按钮用两字版：「跟随系统」比「浅色/深色」宽两个汉字，系统字体一放大就把顶栏顶出横向滚动
-// （用户实测：主题选跟随系统才会横向滚动）。设置页的下拉仍然写全「跟随系统」。
-const THEME_BTN_LABEL = { auto: '自动', light: '浅色', dark: '深色' };
+// 说法表在 core 的 LABELS 里：设置页的下拉用全称，顶栏那颗按钮用短版（长标签会把顶栏顶出横滚）。
+const { theme: THEME_LABEL, themeBtn: THEME_BTN_LABEL } = LABELS;
+// 这两个下拉的选项由 LABELS 生成（HTML 里只留空壳），说法只有一处来源。
+fillOptions($('#setTheme'), THEME_LABEL);
+fillOptions($('#setLang'), LABELS.lang);
 let settings = null;
+
+// 读到或存好一份设置都走这里：本面板的值与别处要用的「反馈语言默认值」一起更新。
+function useSettings(next) {
+  settings = next;
+  prefs.lang = next.lang;
+}
 let availableModels = [];
 let keyNames = [];
 // 平台与密钥存储方式决定两处界面：「打开 .env / settings.json」只有 Windows 有；
 // 密钥值管理（只写不读）只在移动版有——桌面版的密钥在 .env 里，工具绝不写它（D16）。
 let platform = 'unknown';
 let keysFile = null;
+let internalVocabFile = null;
+let internalWired = false;
 let pickerMounted = false;
 
 function modelLabel(model) {
@@ -59,16 +56,19 @@ function setSaveState(message, bad) {
   el.className = bad ? 'save-state bad' : 'save-state';
 }
 
-const VOCAB_NOTE = '指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。';
-const VOCAB_NOTE_MOBILE = '手机上词表默认住应用沙盒；用上面的「选取词表文件…」可以直接切到外部文件（放进 Syncthing 同步的文件夹就能自动同步）。';
+const VOCAB_NOTE = '指向真实的词表文件（Obsidian 库里那份）。保存后立即生效。留空或文件不存在会被驳回。';
+// 移动版没有「Obsidian 库里的路径」这回事，别让手机用户去找一个不存在的文件
+const VOCAB_NOTE_MOBILE =
+  '词表默认住应用沙盒。「选取词表文件…」原地读写你选的那份文件，放进 Syncthing 的文件夹就能和电脑共用同一份；空文件会先把当前词表写过去，读不写得开时提示去开「所有文件访问」。云盘位置拿不到真实路径，改用下面的「从文件导入并替换…」。回到沙盒那份点「用回应用内词表」。';
 
 function showVocabNote(problem) {
   const el = $('#vocabFileNote');
   if (problem) {
     el.textContent = `当前读不了词表：${problem}。把路径改对再保存。`;
   } else {
-    // 移动版没有「Obsidian 库里的路径」这回事，别让手机用户去找一个不存在的文件
-    el.textContent = keysFile ? VOCAB_NOTE_MOBILE : VOCAB_NOTE;
+    // 「手机词表住沙盒」的判断看内部词表在不在：桌面版导过设备包也可能有 keys.json，
+    // 但那不等于这段手机专属的说明该摆出来。
+    el.textContent = internalVocabFile ? VOCAB_NOTE_MOBILE : VOCAB_NOTE;
   }
   el.className = problem ? 'hint bad' : 'hint';
 }
@@ -103,18 +103,16 @@ async function saveSettings(patch, notice) {
     const switched = body.settings.vocabFile !== before;
     // 端口与访问范围只在启动时读一次：改了它们要重启服务才生效（D44）。
     const restart = body.settings.port !== beforePort || body.settings.lanAccess !== beforeLan;
-    settings = body.settings;
+    useSettings(body.settings);
     applyTheme(settings.theme);
     syncSettingDefaults();
     showVocabNote(body.vocabFileError);
-    setSaveState(`已保存 ${new Date().toLocaleTimeString()}${restart ? ' · 端口/访问范围重启后生效' : ''}`);
-    if (notice) toast(restart ? `${notice} · 端口或访问范围改了，重启服务后生效` : notice);
+    report($('#saveState'), `${notice || '设置已保存'}${restart ? ' · 端口或访问范围改了，重启服务后生效' : ''}`);
     if (switched && vocabFileReload) await vocabFileReload();
     if (panelsReload) await panelsReload();
     return true;
   } catch (e) {
-    setSaveState(`保存失败：${e.message}`, true);
-    toast(e.message, 'bad');
+    report($('#saveState'), `保存失败：${e.message}`, true);
     return false;
   }
 }
@@ -162,25 +160,30 @@ function renderModelChips() {
 async function loadSettings() {
   try {
     const body = await api('/api/settings');
-    settings = body.settings;
+    useSettings(body.settings);
     availableModels = body.models;
     keyNames = body.keyNames || [];
-    fillModelSelect(body.models, settings.model);
+    fillSelect($('#model'), body.models, settings.model);
     $('#keyFlag').hidden = Boolean(body.hasKey);
-    $('#vocabFile').value = body.vocabFile || '';
-    $('#setPort').value = String(settings.port ?? 5317);
+    $('#vocabFile').value = settings.vocabFile || '';
+    $('#setPort').value = String(settings.port);
     $('#setLan').checked = Boolean(settings.lanAccess);
     platform = body.platform || 'unknown';
+    // 宿主平台与「是不是本机开的页面」这两件事别处也要用（文件怎么交出去、设备包能不能带密钥）
+    setDeployment({ inApp: platform === 'android', local: Boolean(body.local) });
     keysFile = body.keysFile || null;
-    // keysFile 定下来再写词表备注：移动版与桌面版的措辞不同
+    internalVocabFile = body.internalVocabFile || null;
+    // 内部路径定下来再写词表备注：移动版与桌面版的措辞不同
     showVocabNote(body.vocabFileError);
     $('#openEnv').hidden = $('#openSettings').hidden = platform !== 'win32';
     $('#keysRow').hidden = $('#keysEditRow').hidden = $('#keysHint').hidden = !keysFile;
     // 词表路径旁的「浏览…（桌面）/选取词表文件…（手机）」按平台挂一次（重复 loadSettings 不重复挂）
     if (!pickerMounted) {
       pickerMounted = true;
-      mountVocabPicker({ platform, isLocal: Boolean(body.local), isMobile: Boolean(keysFile) });
+      // 「手机那套」看内部词表在不在：桌面版导过设备包也会有 keys.json，那不是手机
+      mountVocabPicker({ platform, isLocal: Boolean(body.local), isMobile: Boolean(internalVocabFile) });
     }
+    syncInternalButton();
     // 移动版没有 .env，那段「密钥写在 .env 里」的说明换成沙盒口径，别让手机用户去找不存在的文件
     if (keysFile) {
       $('#modelHint').textContent =
@@ -238,13 +241,11 @@ $('#saveKey').addEventListener('click', async () => {
   const value = $('#newKeyValue').value;
   const state = $('#keysState');
   if (!/^[A-Za-z0-9_]+$/.test(name)) {
-    state.textContent = '密钥名只能用字母、数字和下划线';
-    state.className = 'save-state bad';
+    report(state, '密钥名只能用字母、数字和下划线', true);
     return;
   }
   if (!value.trim()) {
-    state.textContent = '密钥值不能为空';
-    state.className = 'save-state bad';
+    report(state, '密钥值不能为空', true);
     return;
   }
   state.textContent = '保存中…';
@@ -260,22 +261,17 @@ $('#saveKey').addEventListener('click', async () => {
     renderKeyNames();
     // 新密钥顺手选进「新增候选」的密钥下拉里
     fillSelect($('#newModelKey'), keyNames, name);
-    state.textContent = `已保存 ${name}（值不再回显）`;
-    state.className = 'save-state';
+    report(state, `已保存 ${name}（值不再回显）`);
   } catch (e) {
-    state.textContent = `保存失败：${e.message}`;
-    state.className = 'save-state bad';
+    report(state, `保存失败：${e.message}`, true);
   }
 });
 
-// 导出：服务端带附件头，落地成一份 Markdown 下载。
+// 导出：内容整个由服务端给（带附件头的原文），这里只管交出去——桌面是浏览器下载，手机上跳桥页
+// 走系统分享（应用里主界面没有插件桥，`<a download>` 点了不会有任何反应，D50）。
 $('#exportVocab').addEventListener('click', () => {
-  const a = document.createElement('a');
-  a.href = '/api/vocab/export';
-  a.download = `Vocabulary-${new Date().toISOString().slice(0, 10)}.md`;
-  document.body.append(a);
-  a.click();
-  a.remove();
+  deliverFile(`Vocabulary-${new Date().toISOString().slice(0, 10)}.md`, '/api/vocab/export');
+  toast(runningInApp() ? '词表已交给系统分享…' : '词表已交给浏览器下载…');
 });
 
 // 导入走两步确认（同「删除」的 armed 模式）：选好文件先亮出确认键，5 秒内再点才真正替换。
@@ -310,8 +306,7 @@ async function doImport(file, stateEl = $('#vocabTransfer')) {
   const state = stateEl;
   if (!file) return;
   if (file.size > 900_000) {
-    state.textContent = '文件超过 1MB 上限';
-    state.className = 'save-state bad';
+    report(state, '文件超过 1MB 上限', true);
     return;
   }
   state.textContent = '导入中…';
@@ -323,14 +318,11 @@ async function doImport(file, stateEl = $('#vocabTransfer')) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-    state.textContent = `已导入 ${res.stats.total} 词 · 备份 ${res.backup}`;
-    state.className = 'save-state';
     // 词表刚被整份替换，词表面板的数据要跟着重读（loadEntries 由入口接进来，避免 import 环）
     if (vocabFileReload) await vocabFileReload();
-    toast(`词表已导入 ${res.stats.total} 词 · 备份 ${res.backup}`);
+    report(state, `词表已导入 ${res.stats.total} 词 · 备份 ${res.backup}`);
   } catch (e) {
-    state.textContent = `导入失败：${e.message}`;
-    state.className = 'save-state bad';
+    report(state, `导入失败：${e.message}`, true);
   } finally {
     $('#importVocabFile').value = '';
     const btn = $('#importVocab');
@@ -339,10 +331,17 @@ async function doImport(file, stateEl = $('#vocabTransfer')) {
   }
 }
 
+// 「用回应用内词表」只在手机上露面，且当前不是内部那份（桌面版的路径自己填，没这个入口）。
+// 判据是「监听真挂上了」：光看配置可能亮起一颗没人接线的按钮。
+function syncInternalButton() {
+  const shown = internalWired && internalVocabFile && settings && settings.vocabFile !== internalVocabFile;
+  $('#useInternalVocab').hidden = !shown;
+}
+
 // 词表路径旁的「选取」（D47/D48）。两端各一套、都落到同一个动作——**直接在选中的文件上读写**：
 //  · Windows 桌面（且就在本机开页面）：调 /api/pick-file 弹原生文件框，选中即切过去；
 //  · 安卓 App：跳去 Capacitor 桥页（那里才有原生插件）先要「所有文件访问」权限再弹系统文件
-//    选择器，带着真实路径回来接着切（?picked=…）。
+//    选择器，带着真实路径回来接着切（?picked=…）；旁边那颗「用回应用内词表」切回沙盒那份。
 //  · 其他情况（如从手机浏览器访问电脑）：两个按钮都不显示，路径手填。
 function mountVocabPicker({ platform, isLocal, isMobile }) {
   const hint = $('#pickHint');
@@ -363,8 +362,8 @@ function mountVocabPicker({ platform, isLocal, isMobile }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: picked }),
       });
-      say(`已切到 ${res.vocabFile}（${res.stats.total} 词${res.copied ? '，已把当前词表写了过去' : ''}）——之后都在这个文件上读写`);
-      toast(`词表现在是 ${res.vocabFile} 里那一份（${res.stats.total} 词）`);
+      // 结果只弹右下角：原地那一格留给「正在做」，收尾就清掉（路径这种长串摆在行内只会顶宽）
+      report(hint, `词表现在是 ${res.vocabFile} 里那一份（${res.stats.total} 词${res.copied ? '，已把当前词表写了过去' : ''}）`);
       await loadSettings();
       if (vocabFileReload) await vocabFileReload();
     } catch (e) {
@@ -373,7 +372,7 @@ function mountVocabPicker({ platform, isLocal, isMobile }) {
         openBridgePicker();
         return;
       }
-      say(`没切成：${e.message}`, true);
+      report(hint, `没切成：${e.message}`, true);
     }
   }
 
@@ -391,12 +390,12 @@ function mountVocabPicker({ platform, isLocal, isMobile }) {
       try {
         const res = await api('/api/pick-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
         if (!res.path) {
-          say('已取消选择');
+          report(hint, '已取消选择');
           return;
         }
         await applyPickedPath(res.path);
       } catch (e) {
-        say(`打开文件框失败：${e.message}`, true);
+        report(hint, `打开文件框失败：${e.message}`, true);
       } finally {
         browse.disabled = false;
       }
@@ -404,6 +403,23 @@ function mountVocabPicker({ platform, isLocal, isMobile }) {
   } else if (isMobile) {
     $('#pickVocabMobile').hidden = false;
     $('#pickVocabMobile').addEventListener('click', openBridgePicker);
+    // 切回沙盒那份：内部文件原样用（要往里写内容走下面的「从文件导入并替换…」）
+    internalWired = true;
+    $('#useInternalVocab').addEventListener('click', async () => {
+      say('切回应用内部…');
+      try {
+        const res = await api('/api/vocab/use-internal', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        });
+        report(hint, `词表现在是应用沙盒里那一份（${res.stats.total} 词）`);
+        await loadSettings();
+        if (vocabFileReload) await vocabFileReload();
+      } catch (e) {
+        report(hint, `没切成：${e.message}`, true);
+      }
+    });
   }
 
   // 从桥页跳回来：带着选好的路径（或取消标记）——自动接着切
@@ -414,7 +430,7 @@ function mountVocabPicker({ platform, isLocal, isMobile }) {
   if (picked || cancelled) {
     history.replaceState(null, '', location.pathname);
     if (picked) setTimeout(() => applyPickedPath(picked), 300);
-    else say('已取消选择');
+    else report(hint, '已取消选择');
   }
 }
 
@@ -429,12 +445,9 @@ async function openConfigFile(which) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ which }),
     });
-    toast(`已在记事本中打开 ${res.file}`);
-    out.textContent = `已打开 ${res.file}`;
+    report(out, `已在记事本中打开 ${res.file}`);
   } catch (e) {
-    toast(e.message, 'bad');
-    out.textContent = `打开失败：${e.message}`;
-    out.className = 'save-state bad';
+    report(out, `打开失败：${e.message}`, true);
   }
 }
 
@@ -504,8 +517,7 @@ $('#testModel').addEventListener('click', async () => {
   const known = (settings?.extraModels || []).find((m) => m.name === model);
   const baseUrl = $('#newModelUrl').value.trim() || known?.baseUrl || '';
   if (!model || !baseUrl) {
-    out.textContent = '请填模型名和接入点';
-    out.className = 'save-state bad';
+    report(out, '请填模型名和接入点', true);
     return;
   }
   const body = { model, baseUrl, keyName: $('#newModelKey').value };
@@ -514,8 +526,7 @@ $('#testModel').addEventListener('click', async () => {
     try {
       body.extra = JSON.parse(extraRaw);
     } catch {
-      out.textContent = '附加参数 JSON 有误';
-      out.className = 'save-state bad';
+      report(out, '附加参数 JSON 有误', true);
       return;
     }
   }
@@ -525,10 +536,9 @@ $('#testModel').addEventListener('click', async () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    out.textContent = `连通 OK · ${res.model} · ${res.latencyMs}ms`;
+    report(out, `连通 OK · ${res.model} · ${res.latencyMs}ms`);
   } catch (e) {
-    out.textContent = `不通：${e.message}${e.details ? ` · ${e.details}` : ''}`;
-    out.className = 'save-state bad';
+    report(out, `不通：${e.message}${e.details ? ` · ${e.details}` : ''}`, true);
   }
 });
 
@@ -549,4 +559,4 @@ initMigrate({
   },
 });
 
-export { settings, loadSettings };
+export { loadSettings };
