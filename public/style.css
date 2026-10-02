@@ -7,33 +7,34 @@
 :root {
   color-scheme: light;
 
-  --bg: #f2f3f1;
+  --bg: #f5f4f8;
   --surface: #ffffff;
-  --surface-2: #fafbf9;
-  --surface-3: #eef0ec;
-  --line: #e2e4df;
-  --line-strong: #ced2cb;
+  --surface-2: #faf9fc;
+  --surface-3: #efedf6;
+  --line: #e6e3ee;
+  --line-strong: #cfc9de;
 
-  --fg: #1e2422;
-  --fg-2: #3f4844;
-  --fg-muted: #6f7772;
+  --fg: #23212e;
+  --fg-2: #454154;
+  --fg-muted: #767089;
 
-  --accent: #2f6f4f;
+  /* 主色是放淡一档的雾霾紫：填充按钮用 #6f67a8（白字对比 4.6:1），选中面与描边用更浅的丁香。 */
+  --accent: #6f67a8;
   --accent-fg: #ffffff;
-  --accent-soft: #e7f1ea;
-  --accent-line: #bcd8c6;
+  --accent-soft: #f0eefa;
+  --accent-line: #d6d0ec;
 
-  --danger: #a3312a;
-  --danger-soft: #fbefee;
-  --danger-line: #e8c9c5;
-  --warn: #8a6318;
-  --warn-soft: #f7efdd;
+  --danger: #a8455c;
+  --danger-soft: #fbf0f3;
+  --danger-line: #eccdd6;
+  --warn: #8f6b2a;
+  --warn-soft: #f8f1e2;
 
   --radius-sm: 6px;
   --radius: 10px;
   /* 圆角只有两档：6px 给控件与内嵌小盒，10px 给页面级的卡片容器；胶囊（标签、进度条）用 999px。 */
-  --shadow-1: 0 1px 2px rgba(18, 26, 22, 0.06);
-  --shadow-2: 0 10px 30px rgba(18, 26, 22, 0.14);
+  --shadow-1: 0 1px 2px rgba(35, 30, 60, 0.06);
+  --shadow-2: 0 12px 32px rgba(35, 30, 60, 0.12);
 
   --side-w: 218px;
   /* 页面级块（工具条、清单、卡片、结算面板……）之间的统一间隙，以及内容列的统一宽度。 */
@@ -43,48 +44,48 @@
   --mono: ui-monospace, Consolas, "Cascadia Mono", monospace;
 
   /* CEFR 六档：A1 起按难度递增换色相，两套主题各自核对过对比度 */
-  --l-A1-bg: #e2f0e7; --l-A1-fg: #26674a;
-  --l-A2-bg: #dfedf2; --l-A2-fg: #225d70;
-  --l-B1-bg: #e1e9f6; --l-B1-fg: #2a5486;
-  --l-B2-bg: #e4e5f6; --l-B2-fg: #414590;
-  --l-C1-bg: #ede2f5; --l-C1-fg: #663a80;
-  --l-C2-bg: #f7e2e9; --l-C2-fg: #8a3052;
+  --l-A1-bg: #e6f0e9; --l-A1-fg: #2c6647;
+  --l-A2-bg: #e2eef1; --l-A2-fg: #275d68;
+  --l-B1-bg: #e4eaf7; --l-B1-fg: #34527f;
+  --l-B2-bg: #e8e6f7; --l-B2-fg: #4a4585;
+  --l-C1-bg: #efe4f6; --l-C1-fg: #6b3f85;
+  --l-C2-bg: #f7e3ee; --l-C2-fg: #8a3a63;
 }
 
 html[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #141618;
-  --surface: #1b1e21;
-  --surface-2: #202427;
-  --surface-3: #262a2e;
-  --line: #2c3134;
-  --line-strong: #3d4347;
+  --bg: #0b0b10;
+  --surface: #131319;
+  --surface-2: #181820;
+  --surface-3: #1f1f29;
+  --line: #262530;
+  --line-strong: #3a3847;
 
-  --fg: #e7e8e5;
-  --fg-2: #c2c5c0;
-  --fg-muted: #929993;
+  --fg: #ece9f4;
+  --fg-2: #c3bfd2;
+  --fg-muted: #8c869f;
 
-  --accent: #74c296;
-  --accent-fg: #10201a;
-  --accent-soft: #1d2b24;
-  --accent-line: #345440;
+  --accent: #a79bd9;
+  --accent-fg: #121019;
+  --accent-soft: #1d1a2c;
+  --accent-line: #3b3560;
 
-  --danger: #e58c85;
-  --danger-soft: #2a1f1e;
-  --danger-line: #5a3a37;
-  --warn: #d6ab6a;
-  --warn-soft: #2b2417;
+  --danger: #eb9cb2;
+  --danger-soft: #24161c;
+  --danger-line: #4a2b36;
+  --warn: #dcb27c;
+  --warn-soft: #241c10;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 14px 36px rgba(0, 0, 0, 0.65);
 
-  --l-A1-bg: #1b2a22; --l-A1-fg: #7fc79e;
-  --l-A2-bg: #172a2e; --l-A2-fg: #78bcc9;
-  --l-B1-bg: #18252f; --l-B1-fg: #85b2df;
-  --l-B2-bg: #1e2037; --l-B2-fg: #9ea3e5;
-  --l-C1-bg: #251c2f; --l-C1-fg: #c09ad7;
-  --l-C2-bg: #2d1b23; --l-C2-fg: #df93ab;
+  --l-A1-bg: #14231b; --l-A1-fg: #82c79f;
+  --l-A2-bg: #102126; --l-A2-fg: #7bbcc7;
+  --l-B1-bg: #121d28; --l-B1-fg: #8cb2dd;
+  --l-B2-bg: #17162a; --l-B2-fg: #a39ee6;
+  --l-C1-bg: #1c1426; --l-C1-fg: #c39bd8;
+  --l-C2-bg: #211319; --l-C2-fg: #e094b0;
 }
 
 /* ---- 基础 ---- */
@@ -106,6 +107,12 @@ body {
      个别需要横向滚动的容器（顶部导航条、diff 框）自己在内部滚。 */
   overflow-x: clip;
   overscroll-behavior-x: none;
+}
+
+/* 选中一段释义去别处粘贴是高频动作：选中面跟着主色走，别留系统蓝。 */
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg);
 }
 
 h1 {
@@ -345,7 +352,14 @@ textarea {
 }
 
 select {
-  padding-right: 6px;
+  /* 原生下拉自带一个 Windows 风格的箭头方块：换成自己的细箭头。颜色取中性灰，
+     深浅两套底上都看得见，所以这一处不走变量。 */
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8499' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
 }
 
 input[type="checkbox"],
@@ -429,6 +443,16 @@ button:focus-visible {
   color: var(--fg-muted);
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
+}
+
+/* 这些格子里写的常常是外部串（文件路径、备份文件名）：一律允许在任意处断开，
+   免得一个不断行的长串把所在的那一行顶宽（防横滚的第一道，第一道失手还有 core 的 fitRow）。 */
+.save-state,
+.count,
+.hint,
+.key-flag {
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .save-state {
@@ -638,6 +662,7 @@ button:disabled {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
 }
 
 .stat b {
@@ -728,6 +753,7 @@ button:disabled {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
 
@@ -1308,6 +1334,10 @@ button:disabled {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  /* fieldset 默认 min-inline-size: min-content：里面塞进一长串不可断的文字（比如一条完整路径），
+     整块会被顶得比父容器还宽、把整页撑出横向滚动。钉成 0，宽度只由父容器说了算。 */
+  min-inline-size: 0;
 }
 
 .settings fieldset > * + * {
@@ -1497,6 +1527,8 @@ button:disabled {
   color: var(--fg);
   box-shadow: var(--shadow-2);
   animation: rise-in 0.18s ease;
+  /* 结果里常带文件路径这类长串：允许任意处断开，别让它顶宽弹窗、也别越出左边 */
+  overflow-wrap: anywhere;
 }
 
 .toast.bad {
@@ -1561,9 +1593,15 @@ button:disabled {
     font-size: clamp(9px, 2.6vw - 1px, 11.5px);
   }
 
+  /* 顶栏两条的字号都挂上 --fit（core 的 fitRow 量到真溢出才把它压到 1 以下）：压字号是
+     避免横滚的正招，别截省略号——文字截掉了，人还得猜它是什么。 */
   .topbar-tools {
-    font-size: clamp(11px, 3.2vw - 0.6px, 14px);
+    font-size: calc(clamp(11px, 3.2vw - 0.6px, 14px) * var(--fit, 1));
     gap: 8px;
+  }
+
+  .key-flag {
+    font-size: calc(12.5px * var(--fit, 1));
   }
 
   .overview .ov-row,
@@ -1580,8 +1618,8 @@ button:disabled {
     gap: 8px;
   }
 
-  /* 系统字体放大（实测 1.3×）时顶栏这一行会顶出横向滚动：标题不缩（最多四个字），
-     让工具条收缩，「重新读取」这类长按钮让出省略号，整行始终留在视口内。 */
+  /* 系统字体放大（实测 1.3×）时顶栏这一行会顶出横向滚动：标题不缩（最多四个字），让工具条
+     整体压字号（--fit），整行始终留在视口内。 */
   .topbar h1 {
     flex: none;
   }
@@ -1595,10 +1633,7 @@ button:disabled {
   }
 
   .topbar-tools .btn {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: none;
     white-space: nowrap;
   }
 
@@ -1630,8 +1665,8 @@ button:disabled {
   }
 }
 
-/* 系统字体放大时（安卓 1.3× 实测）5 个导航项 + 概览放不进一行：JS 量出溢出就挂这个类，
-   收起概览而不是让顶部条横滚。它比 360px 断点晚生效、也随字体大小变化。 */
+/* 系统字体放大时（安卓 1.3× 实测）5 个导航项 + 概览放不进一行：core 的 fitChrome 量出溢出就挂
+   这个类收起概览，而不是让顶部条横滚。它比 360px 断点晚生效、也随字体大小变化。 */
 html.nav-compact .overview {
   display: none;
 }
