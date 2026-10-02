@@ -1324,6 +1324,16 @@ button:disabled {
   min-width: 150px;
 }
 
+/* 移动版的密钥编辑：名字定宽，值吃掉余量 */
+#newKeyName {
+  flex: 0 1 240px;
+  min-width: 150px;
+}
+
+#newKeyValue {
+  flex: 1 1 260px;
+}
+
 #newModelUrl {
   flex: 1 1 280px;
 }

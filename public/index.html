@@ -148,6 +148,13 @@
                 <p class="hint" id="vocabFileNote">
                   指向真实的词表文件（Obsidian 库里那份）。保存后立即生效，不用重启服务；留空或文件不存在会被驳回。
                 </p>
+                <div class="row">
+                  <button id="exportVocab" class="btn" type="button">下载当前词表</button>
+                  <button id="importVocab" class="btn" type="button">从文件导入并替换…</button>
+                  <input id="importVocabFile" type="file" accept=".md,.markdown,.txt" hidden />
+                  <span id="vocabTransfer" class="save-state"></span>
+                </div>
+                <p class="hint">导出与导入都是整份 Markdown：导入前自动备份当前词表，解析不过的文件会被原样拒收。</p>
               </fieldset>
 
               <fieldset>
@@ -197,6 +204,18 @@
                   <input id="newModelExtra" type="text" placeholder='附加参数 JSON（可选），如 {"thinking": null} 表示摘掉这个字段' />
                 </div>
                 <div class="row" id="modelList"></div>
+                <div class="row" id="keysRow" hidden>
+                  <span id="keyNamesLine" class="gen-example"></span>
+                </div>
+                <div class="row" id="keysEditRow" hidden>
+                  <input id="newKeyName" type="text" placeholder="密钥名（字母、数字、下划线）" />
+                  <input id="newKeyValue" type="password" placeholder="密钥值（保存后不再回显）" />
+                  <button id="saveKey" class="btn" type="button">保存密钥</button>
+                  <span id="keysState" class="save-state"></span>
+                </div>
+                <p class="hint" id="keysHint" hidden>
+                  移动版的密钥值保存在应用沙盒里，只写不读：保存之后不再回显，用同一个名字重填一次就是更换。
+                </p>
                 <div class="row">
                   <button id="testModel" class="btn" type="button">测试连通</button>
                   <button id="openEnv" class="btn ghost" type="button">打开 .env</button>

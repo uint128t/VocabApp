@@ -49,3 +49,21 @@ test('loadConfig no longer decides the vocabulary path', () => {
   assert.equal(c.vocabFile, undefined);
   assert.equal(c.vocabMirror, undefined);
 });
+
+test('VOCAB_KEYS_FILE merges key values and readKeys() picks up live changes', () => {
+  const dir = sandbox();
+  const keysFile = path.join(dir, 'keys.json');
+  fs.writeFileSync(keysFile, JSON.stringify({ MOBILE: 'sk-m1' }));
+  const c = loadConfig({ dir, env: { VOCAB_KEYS_FILE: keysFile, VOCAB_KEY_ENV: 'sk-env' } });
+  assert.deepEqual(c.keys, { ENV: 'sk-env', MOBILE: 'sk-m1' });
+  assert.equal(c.keysFile, keysFile);
+
+  // /api/keys 写完文件后，readKeys() 现读就能看到，不用重启
+  fs.writeFileSync(keysFile, JSON.stringify({ MOBILE: 'sk-m2', NEW: 'sk-n1' }));
+  assert.deepEqual(c.readKeys(), { ENV: 'sk-env', MOBILE: 'sk-m2', NEW: 'sk-n1' });
+
+  // 没有 keysFile 的桌面部署：readKeys() 返回静态快照，keysFile 为 null
+  const d = loadConfig({ dir, env: { VOCAB_KEY_ENV: 'sk-env' } });
+  assert.equal(d.keysFile, null);
+  assert.deepEqual(d.readKeys(), { ENV: 'sk-env' });
+});

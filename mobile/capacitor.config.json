@@ -1,0 +1,11 @@
+{
+  "appId": "com.uint128t.vocabapp",
+  "appName": "Vocabulary 助手",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorNodeJS": {
+      "nodeDir": "nodejs",
+      "startMode": "manual"
+    }
+  }
+}

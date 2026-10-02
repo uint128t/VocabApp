@@ -65,6 +65,8 @@ function normalizeModel(entry, keyNames) {
 function mergeSettings(current, patch, { keyNames } = {}) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return bad('设置必须是对象');
   const next = structuredClone(current);
+  // 移动版里密钥可以在运行期添加（/api/keys），keyNames 允许传取值函数，每次校验现取现用。
+  const names = typeof keyNames === 'function' ? keyNames() : keyNames;
 
   try {
     if ('vocabFile' in patch) {
@@ -86,7 +88,7 @@ function mergeSettings(current, patch, { keyNames } = {}) {
       if (!Array.isArray(patch.extraModels)) throw new Error('extraModels 必须是数组');
       const list = [];
       for (const entry of patch.extraModels) {
-        const model = normalizeModel(entry, keyNames);
+        const model = normalizeModel(entry, names);
         if (!list.some((m) => m.name === model.name)) list.push(model);
       }
       next.extraModels = list;

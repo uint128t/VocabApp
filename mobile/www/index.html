@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vocabulary 助手</title>
+    <style>
+      /* 加载页配色与主应用的深色主题一致：主界面由内嵌服务接管后另有自己的主题 */
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #141618;
+        color: #e7e8e5;
+        font: 14px/1.6 system-ui, "Segoe UI", "Noto Sans SC", "PingFang SC", sans-serif;
+      }
+
+      .box {
+        display: grid;
+        gap: 12px;
+        justify-items: center;
+        padding: 24px;
+      }
+
+      .spin {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 3px solid #2c3134;
+        border-top-color: #74c296;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      #msg {
+        color: #929993;
+        font-size: 13px;
+        text-align: center;
+      }
+
+      button {
+        font: inherit;
+        padding: 6px 16px;
+        border-radius: 6px;
+        border: 1px solid #3d4347;
+        background: transparent;
+        color: #e7e8e5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="spin" id="spin"></div>
+      <div id="msg">正在启动词表服务…</div>
+      <button id="retry" hidden>重新等待</button>
+    </div>
+    <script type="module" src="loader.js"></script>
+  </body>
+</html>

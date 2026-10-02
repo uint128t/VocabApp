@@ -21,8 +21,9 @@ import { createAi, CONTRACTS } from './ai.js';
 import { createSettings, DEFAULTS, modelEndpoints } from './settings.js';
 import { createCefr, CEFR_LEVELS } from './cefr.js';
 import { loadConfig } from './config.js';
+import { moduleDir } from './dirname.js';
 
-const PUBLIC = path.join(import.meta.dirname, 'public');
+const PUBLIC = path.join(moduleDir(import.meta.url), 'public');
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -238,14 +239,14 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       ? createSession({
           store,
           ai,
-          stateFile: createStateFile({ file: path.join(config.stateDir || path.join(import.meta.dirname, '.state'), 'session.json') }),
+          stateFile: createStateFile({ file: path.join(config.stateDir || path.join(moduleDir(import.meta.url), '.state'), 'session.json') }),
         })
       : null);
   const settingsStore =
     settings ||
     createSettings({
-      stateFile: createStateFile({ file: config.settingsFile || path.join(import.meta.dirname, 'settings.json') }),
-      keyNames: config.keyNames,
+      stateFile: createStateFile({ file: config.settingsFile || path.join(moduleDir(import.meta.url), 'settings.json') }),
+      keyNames: () => Object.keys(config.readKeys()),
     });
   const currentSettings = () => settingsStore.get().settings;
   const modelList = () => [
@@ -257,6 +258,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
 
     '/api/settings': () => {
       const { settings: s, error } = settingsStore.get();
+      const keys = config.readKeys();
       return {
         status: 200,
         body: {
@@ -265,14 +267,29 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
           defaults: DEFAULTS,
           contracts: { entry: CONTRACTS.entry, judge: CONTRACTS.judge },
           models: modelList(),
-          keyNames: config.keyNames ?? [],
+          keyNames: Object.keys(keys),
+          // 前端按平台收功能：「打开配置文件」只有 Windows 有（notepad），密钥值管理只在移动版有（keysFile）
+          platform: process.platform,
+          keysFile: config.keysFile,
           modelRoutes: Object.fromEntries(s.extraModels.map((m) => [m.name, { baseUrl: m.baseUrl, keyName: m.keyName }])),
           envFile: config.envFile,
           settingsFile: config.settingsFile,
           vocabFile: s.vocabFile ?? null,
           vocabFileError: vocabFileProblem(s.vocabFile),
-          hasKey: Boolean(config.keyNames?.length),
+          hasKey: Boolean(Object.keys(keys).length),
         },
+      };
+    },
+
+    // 整表导出：把当前词表原文作为附件下发（移动版里这是把词表带出应用的正式通道）。
+    '/api/vocab/export': () => {
+      const text = store.readFile();
+      const stamp = new Date().toISOString().slice(0, 10);
+      return {
+        status: 200,
+        raw: true,
+        headers: { 'content-disposition': `attachment; filename="Vocabulary-${stamp}.md"` },
+        body: text,
       };
     },
 
@@ -384,6 +401,8 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     },
 
     '/api/open-config': async (req) => {
+      // 「打开配置文件」用 Windows 的记事本；移动版界面上这两个按钮本来就藏起来，这里再兜一层
+      if (process.platform !== 'win32') throw httpError(501, 'notSupported', '此平台不支持从界面打开配置文件');
       const body = await readJson(req);
       const target = body.which === 'env' ? config.envFile : body.which === 'settings' ? config.settingsFile : null;
       if (!target) throw httpError(400, 'badTarget', "which 只能是 'env' 或 'settings'");
@@ -397,7 +416,7 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       const body = await readJson(req);
       const keyName = typeof body.keyName === 'string' ? body.keyName.trim() : '';
       if (!keyName) throw httpError(400, 'badKeyName', '缺少密钥名');
-      const apiKey = config.keys?.[keyName] || '';
+      const apiKey = config.readKeys()[keyName] || '';
       if (!apiKey) throw httpError(400, 'badKeyName', `.env 里没有名为 ${keyName} 的密钥（用 VOCAB_KEY_${keyName}=… 添加）`);
       const target = {
         baseUrl: typeof body.baseUrl === 'string' && body.baseUrl.trim() ? body.baseUrl.trim() : undefined,
@@ -797,6 +816,44 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
       return { status: 200, body: getRoutes['/api/settings']().body };
     },
 
+    // 整表导入：整份 Markdown 替换当前词表。先解析后写盘——解析不过的文件一个字节都不落，
+    // 写盘前照例备份，导坏了能从备份里找回来。
+    '/api/vocab/import': async (req) => {
+      const body = await readJson(req);
+      const text = typeof body?.text === 'string' ? body.text : null;
+      if (text === null) throw httpError(400, 'badText', 'text 必须是字符串');
+      if (!text.trim()) throw httpError(400, 'badText', '导入的内容是空的');
+      const { stats, errors } = parse(text);
+      if (errors.length) {
+        throw httpError(400, 'parseErrors', '导入的词表解析失败，未写入', errors.slice(0, 20));
+      }
+      return store.enqueue(() => {
+        const { backup } = store.writeWithBackup(text);
+        return { status: 200, body: { stats, backup } };
+      });
+    },
+
+    // 密钥值管理（移动版专用，D45）：桌面版的密钥在 .env 里，由用户手工维护、工具绝不写；
+    // 移动版没有可编辑的 .env，密钥值放应用沙盒的 keys.json，这里只写不读——
+    // 密钥值永远不会出现在任何响应里。
+    '/api/keys': async (req) => {
+      if (!config.keysFile) throw httpError(501, 'notSupported', '此部署的密钥在 .env 里，请在服务器上手工维护');
+      const body = await readJson(req);
+      const input = body?.keys;
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw httpError(400, 'badKeys', 'keys 必须是对象');
+      const entries = Object.entries(input);
+      if (!entries.length) throw httpError(400, 'badKeys', 'keys 不能为空');
+      for (const [name, value] of entries) {
+        if (!/^[A-Za-z0-9_]+$/.test(name)) throw httpError(400, 'badKeyName', `密钥名只能用字母、数字和下划线：${name}`);
+        if (typeof value !== 'string' || !value.trim()) throw httpError(400, 'badKeyName', `${name} 的值不能为空`);
+      }
+      const keysStore = createStateFile({ file: config.keysFile });
+      const current = keysStore.read() || {};
+      for (const [name, value] of entries) current[name] = value.trim();
+      keysStore.write(current);
+      return { status: 200, body: { keyNames: Object.keys(config.readKeys()).sort() } };
+    },
+
   };
 
   return http.createServer(async (req, res) => {
@@ -830,8 +887,19 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
     });
 
     try {
-      const { status, body } = await table[pathname](req, url, client.signal);
-      sendJson(res, status, body);
+      const out = await table[pathname](req, url, client.signal);
+      // raw 响应（整表导出这类要带附件头的）绕过 JSON 封装，按调用方给的头原样下发
+      if (out.raw) {
+        if (res.destroyed || res.writableEnded) return;
+        res.writeHead(out.status, {
+          'content-type': 'text/markdown; charset=utf-8',
+          'cache-control': 'no-store',
+          ...(out.headers || {}),
+        });
+        res.end(out.body);
+      } else {
+        sendJson(res, out.status, out.body);
+      }
     } catch (e) {
       if (e.status) sendError(res, e.status, e.code, e.message, e.details);
       else sendError(res, 500, 'internal', e.message);
@@ -839,9 +907,23 @@ export function createApp({ store, config, ai, settings, session, cefr }) {
   });
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+// 移动版入口由 mobile-main.cjs 拉起（它先把数据路径指进应用沙盒、设 VOCAB_MOBILE=1）；
+// 桌面版仍按「node server.js 直接运行」判定。
+if (process.env.VOCAB_MOBILE === '1' || (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url)) {
   const config = loadConfig();
-  const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: config.keyNames });
+  const settings = createSettings({
+    stateFile: createStateFile({ file: config.settingsFile }),
+    // 移动版能在运行期加密钥（/api/keys），keyNames 用取值函数，每次校验现读
+    keyNames: () => Object.keys(config.readKeys()),
+  });
+
+  // 移动版（D45）：数据都在应用沙盒的 dataPath 里。首次启动还没有词表路径时，
+  // 给它一个默认值并在缺文件时建一份空词表——安卓上用户没法手填路径，也 browse 不了文件系统。
+  if (process.env.VOCAB_MOBILE === '1' && process.env.VOCAB_DATA_DIR) {
+    const seedPath = path.join(process.env.VOCAB_DATA_DIR, 'Vocabulary.md');
+    if (!settings.get().settings.vocabFile) settings.patch({ vocabFile: seedPath });
+    if (!fs.existsSync(seedPath)) fs.writeFileSync(seedPath, '', 'utf8');
+  }
 
   // 每个请求都按设置里的当前值找目标：设置页改完保存就立刻生效，不用重启。
   const store = createStore({
@@ -875,7 +957,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const ai = createAi({
     getDefaultModel: () => settings.get().settings.model,
     getPrompts: () => settings.get().settings.prompts,
-    getEndpoints: () => modelEndpoints({ settings: settings.get().settings, keys: config.keys }),
+    getEndpoints: () => modelEndpoints({ settings: settings.get().settings, keys: config.readKeys() }),
   });
   // 端口与访问范围在设置里（D44）：settings.json 的 port 与 lanAccess，改完要重启才生效——
   // listen 只在启动时发生一次。lanAccess 开着监听 0.0.0.0，同一网络里的手机就能打开；
@@ -894,6 +976,6 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     }
     console.log(`数据源：${current.settings.vocabFile || '（还没设置，请在设置页填词表路径）'}`);
     console.log(`生效模型：${current.settings.model || '（未设置，请在设置页选择）'}${current.error ? '（settings.json 读取出错，已用默认值）' : ''}`);
-    if (!config.keyNames?.length) console.log('提示：.env 里没有任何 VOCAB_KEY_名字=… 密钥，加词与自测暂不可用');
+    if (!Object.keys(config.readKeys()).length) console.log('提示：还没有任何密钥，加词与自测暂不可用');
   });
 }

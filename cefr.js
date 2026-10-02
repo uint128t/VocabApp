@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { moduleDir } from './dirname.js';
 
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 // 词表按可信度排：CEFR-J 是 CEFR-J 项目的正式产出，Octanove 补 C1/C2。这两张表都是单词表，
@@ -254,7 +255,7 @@ export function sourceLabel(result) {  if (!result) return 'CEFR 表外';
   return name;
 }
 
-export function createCefr({ dataFile = path.join(import.meta.dirname, 'data', 'cefr.json'), fsImpl = fs } = {}) {
+export function createCefr({ dataFile = path.join(moduleDir(import.meta.url), 'data', 'cefr.json'), fsImpl = fs } = {}) {
   let index = null;
   const load = () => {
     if (index) return index;

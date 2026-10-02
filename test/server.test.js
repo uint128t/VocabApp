@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createApp } from '../server.js';
 import { createStore, createStateFile } from '../store.js';
 import { createSettings } from '../settings.js';
-import { parseEnv, loadConfig } from '../config.js';
+import { parseEnv, loadConfig, readKeysFile } from '../config.js';
 
 const FIXTURE =
   '### A\n\n- absorb\n  - [x] #B1 - take in - Plants absorb water through their roots.\n\n### B\n\n- ballpoint\n  - [ ] #B1 - a pen with a metal ball tip - This ballpoint leaks.\n';
@@ -46,18 +46,24 @@ const fakeCefr = ({ outside = [], levels = {} } = {}) => ({
   }),
 });
 
-async function start(content = FIXTURE, { ai, cefr } = {}) {
+async function start(content = FIXTURE, { ai, cefr, env: envOverrides = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vocab-server-'));
   dirs.push(dir);
   const file = path.join(dir, 'Vocabulary.md');
   fs.writeFileSync(file, content);
+  const keysFile = envOverrides.VOCAB_KEYS_FILE ? path.join(dir, envOverrides.VOCAB_KEYS_FILE) : null;
+  const envKeys = { TEST: 'sk-test' };
   const config = {
     settingsFile: path.join(dir, 'settings.json'),
     stateDir: path.join(dir, 'state'),
-    keys: { TEST: 'sk-test' },
+    envFile: path.join(dir, '.env'),
+    // 与生产 config 一致：keysFile 存在时 readKeys() 现读它（移动版的密钥在运行期可增改）
+    keysFile,
+    keys: keysFile ? { ...envKeys, ...readKeysFile(keysFile) } : envKeys,
+    readKeys: () => (keysFile ? { ...envKeys, ...readKeysFile(keysFile) } : envKeys),
   };
   // 与生产一致：词表路径存在设置里，store 每次都按当前设置取目标（所以改了立刻生效）
-  const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: config.keyNames });
+  const settings = createSettings({ stateFile: createStateFile({ file: config.settingsFile }), keyNames: () => Object.keys(config.readKeys()) });
   settings.patch({ vocabFile: file });
   const store = createStore({ file: () => settings.get().settings.vocabFile, backupDir: path.join(dir, 'backups') });
   const server = createApp({ store, ai, cefr: cefr || fakeCefr(), config, settings });
@@ -72,6 +78,7 @@ async function start(content = FIXTURE, { ai, cefr } = {}) {
     server,
     base,
     settingsFile: config.settingsFile,
+    keysFile,
     stateFile: path.join(dir, 'state', 'session.json'),
   };
 }
@@ -1438,4 +1445,66 @@ test('POST /api/level/commit writes the whole batch in one go with one backup', 
   assert.equal(noop.body.backup, null);
   assert.deepEqual(fs.readFileSync(file), before);
   assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
+});
+
+test('GET /api/vocab/export 下发词表原文并带附件头', async () => {
+  const { base } = await start();
+  const res = await fetch(`${base}/api/vocab/export`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/markdown/);
+  assert.match(res.headers.get('content-disposition'), /attachment; filename="Vocabulary-\d{4}-\d{2}-\d{2}\.md"/);
+  const text = await res.text();
+  assert.match(text, /### A/);
+  assert.ok(text.startsWith('### A\n\n'), '原文原样下发，不是 JSON 包装');
+});
+
+test('POST /api/vocab/import 整表替换：合法的写盘加备份，坏的拒收不落盘', async () => {
+  const { base, file, dir } = await start();
+  const good = '### A\n\n- fresh\n  - [ ] #B1 - something new - It feels fresh today.\n';
+  const ok = await post(base, '/api/vocab/import', { text: good });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.stats.total, 1);
+  assert.match(ok.body.backup, /^Vocabulary\./);
+  assert.equal(fs.readFileSync(file, 'utf8'), good);
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
+
+  const before = fs.readFileSync(file);
+  const broken = await post(base, '/api/vocab/import', { text: '### A\n\n  - [x] #B1 - orphan - Orphan child line.\n' });
+  assert.equal(broken.status, 400);
+  assert.equal(broken.body.error.code, 'parseErrors');
+  assert.deepEqual(fs.readFileSync(file), before, '解析失败的导入一个字节都不写');
+
+  const empty = await post(base, '/api/vocab/import', { text: '   ' });
+  assert.equal(empty.status, 400);
+  const missing = await post(base, '/api/vocab/import', {});
+  assert.equal(missing.status, 400);
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('POST /api/keys 只在配置了 keysFile 的部署上可用，且密钥值从不外泄', async () => {
+  const plain = await start();
+  const denied = await post(plain.base, '/api/keys', { keys: { NEW: 'sk-value' } });
+  assert.equal(denied.status, 501);
+
+  const { base, keysFile, settingsFile } = await start(FIXTURE, { env: { VOCAB_KEYS_FILE: 'keys.json' } });
+  const ok = await post(base, '/api/keys', { keys: { NEW: 'sk-shiny' } });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body.keyNames.sort(), ['NEW', 'TEST']);
+  const stored = JSON.parse(fs.readFileSync(keysFile, 'utf8'));
+  assert.equal(stored.NEW, 'sk-shiny');
+  assert.ok(stored.NEW.includes('shiny'));
+
+  // 新密钥立刻可用于模型校验：不用重启就能加带新 keyName 的模型
+  const model = await post(base, '/api/settings', {
+    extraModels: [{ name: 'm1', baseUrl: 'https://a.test/v1', keyName: 'NEW' }],
+  });
+  assert.equal(model.status, 200);
+
+  const leak = await fetch(`${base}/api/settings`).then((r) => r.text());
+  assert.ok(!leak.includes('sk-shiny') && !leak.includes('sk-test'), '密钥值不出现在任何响应里');
+
+  for (const bad of [{ keys: {} }, { keys: { 'BAD NAME': 'v' } }, { keys: { OK: '' } }, { keys: 'x' }]) {
+    assert.equal((await post(base, '/api/keys', bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.ok(fs.existsSync(settingsFile));
 });

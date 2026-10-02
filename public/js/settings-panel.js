@@ -19,6 +19,10 @@ const THEME_LABEL = { auto: '跟随系统', light: '浅色', dark: '深色' };
 let settings = null;
 let availableModels = [];
 let keyNames = [];
+// 平台与密钥存储方式决定两处界面：「打开 .env / settings.json」只有 Windows 有；
+// 密钥值管理（只写不读）只在移动版有——桌面版的密钥在 .env 里，工具绝不写它（D16）。
+let platform = 'unknown';
+let keysFile = null;
 
 function modelLabel(model) {
   let host = '';
@@ -155,6 +159,12 @@ async function loadSettings() {
     showVocabNote(body.vocabFileError);
     $('#setPort').value = String(settings.port ?? 5317);
     $('#setLan').checked = Boolean(settings.lanAccess);
+    platform = body.platform || 'unknown';
+    keysFile = body.keysFile || null;
+    keyNames = body.keyNames || [];
+    $('#openEnv').hidden = $('#openSettings').hidden = platform !== 'win32';
+    $('#keysRow').hidden = $('#keysEditRow').hidden = $('#keysHint').hidden = !keysFile;
+    renderKeyNames();
     fillSelect($('#newModelKey'), keyNames, keyNames[0]);
     $('#promptEntry').value = settings.prompts.entry || '';
     $('#promptJudge').value = settings.prompts.judge || '';
@@ -192,6 +202,117 @@ async function cycleTheme() {
   const next = order[(order.indexOf(cur) + 1) % order.length];
   applyTheme(next);
   if (settings) await saveSettings({ theme: next });
+}
+
+function renderKeyNames() {
+  const el = $('#keyNamesLine');
+  el.textContent = keyNames.length ? `已存密钥：${keyNames.join('、')}（值不回显）` : '还没有任何密钥';
+}
+
+$('#saveKey').addEventListener('click', async () => {
+  const name = $('#newKeyName').value.trim();
+  const value = $('#newKeyValue').value;
+  const state = $('#keysState');
+  if (!/^[A-Za-z0-9_]+$/.test(name)) {
+    state.textContent = '密钥名只能用字母、数字和下划线';
+    state.className = 'save-state bad';
+    return;
+  }
+  if (!value.trim()) {
+    state.textContent = '密钥值不能为空';
+    state.className = 'save-state bad';
+    return;
+  }
+  state.textContent = '保存中…';
+  state.className = 'save-state';
+  try {
+    const res = await api('/api/keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keys: { [name]: value } }),
+    });
+    $('#newKeyValue').value = '';
+    keyNames = res.keyNames;
+    renderKeyNames();
+    // 新密钥顺手选进「新增候选」的密钥下拉里
+    fillSelect($('#newModelKey'), keyNames, name);
+    state.textContent = `已保存 ${name}（值不再回显）`;
+    state.className = 'save-state';
+  } catch (e) {
+    state.textContent = `保存失败：${e.message}`;
+    state.className = 'save-state bad';
+  }
+});
+
+// 导出：服务端带附件头，落地成一份 Markdown 下载。
+$('#exportVocab').addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.href = '/api/vocab/export';
+  a.download = `Vocabulary-${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+});
+
+// 导入走两步确认（同「删除」的 armed 模式）：选好文件先亮出确认键，5 秒内再点才真正替换。
+let importArmTimer = null;
+$('#importVocab').addEventListener('click', () => {
+  const btn = $('#importVocab');
+  if (!btn.dataset.armed) {
+    $('#importVocabFile').click();
+    return;
+  }
+  clearTimeout(importArmTimer);
+  delete btn.dataset.armed;
+  btn.textContent = '从文件导入并替换…';
+  doImport($('#importVocabFile').files[0]);
+});
+
+$('#importVocabFile').addEventListener('change', () => {
+  const btn = $('#importVocab');
+  const file = $('#importVocabFile').files[0];
+  if (!file) return;
+  btn.dataset.armed = '1';
+  btn.textContent = `确认导入 ${file.name}（替换当前词表）`;
+  clearTimeout(importArmTimer);
+  importArmTimer = setTimeout(() => {
+    delete btn.dataset.armed;
+    btn.textContent = '从文件导入并替换…';
+    $('#importVocabFile').value = '';
+  }, 5000);
+});
+
+async function doImport(file) {
+  const state = $('#vocabTransfer');
+  if (!file) return;
+  if (file.size > 900_000) {
+    state.textContent = '文件超过 1MB 上限';
+    state.className = 'save-state bad';
+    return;
+  }
+  state.textContent = '导入中…';
+  state.className = 'save-state';
+  try {
+    const text = await file.text();
+    const res = await api('/api/vocab/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    state.textContent = `已导入 ${res.stats.total} 词 · 备份 ${res.backup}`;
+    state.className = 'save-state';
+    // 词表刚被整份替换，词表面板的数据要跟着重读（loadEntries 由入口接进来，避免 import 环）
+    if (vocabFileReload) await vocabFileReload();
+    toast(`词表已导入 ${res.stats.total} 词 · 备份 ${res.backup}`);
+  } catch (e) {
+    state.textContent = `导入失败：${e.message}`;
+    state.className = 'save-state bad';
+  } finally {
+    $('#importVocabFile').value = '';
+    const btn = $('#importVocab');
+    delete btn.dataset.armed;
+    btn.textContent = '从文件导入并替换…';
+  }
 }
 
 $('#openEnv').addEventListener('click', () => openConfigFile('env'));
